@@ -6,3 +6,10 @@ __pycache__/
 .env
 .vscode/
 Thumbs.db
+
+# Marimo
+notebooks/__marimo__/
+notebooks/_marimo_cache/
+
+# Claude Code local settings
+.claude/settings.local.json

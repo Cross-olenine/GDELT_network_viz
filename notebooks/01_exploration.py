@@ -1,18 +1,20 @@
 import marimo
 
-__generated_with = "0.10.12"
+__generated_with = "0.23.1"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     # ── Imports ──
+    import time
     import marimo as mo
     import pandas as pd
     import plotly.express as px
     from pathlib import Path
     from gdeltdoc import GdeltDoc, Filters
-    return Filters, GdeltDoc, Path, mo, pd, px
+
+    return Filters, GdeltDoc, Path, mo, pd, px, time
 
 
 @app.cell
@@ -26,8 +28,28 @@ def _(Path):
 
 
 @app.cell
-def _(Filters, GdeltDoc, KEYWORD, NUM_RECORDS, TIMESPAN, mo, pd):
+def _(mo):
     # ── Collecte API ──
+    run_button = mo.ui.run_button(label="Lancer la collecte GDELT")
+    run_button
+    return (run_button,)
+
+
+@app.cell
+def _(
+    Filters,
+    GdeltDoc,
+    KEYWORD,
+    NUM_RECORDS,
+    TIMESPAN,
+    mo,
+    pd,
+    run_button,
+    time,
+):
+    # ── Exécution collecte ──
+    mo.stop(not run_button.value)
+
     _error_msg = None
     try:
         _gd = GdeltDoc()
@@ -36,23 +58,22 @@ def _(Filters, GdeltDoc, KEYWORD, NUM_RECORDS, TIMESPAN, mo, pd):
             timespan=TIMESPAN,
             num_records=NUM_RECORDS,
         )
+        time.sleep(10)
         articles_df = _gd.article_search(_filters)
+        print("Shape:", articles_df.shape)
+        print("Colonnes:", articles_df.columns.tolist())
     except Exception as _e:
         articles_df = pd.DataFrame()
         _error_msg = str(_e)
-
-    if _error_msg:
-        mo.stop(
-            True,
-            mo.callout(mo.md(f"Erreur lors de la collecte GDELT : {_error_msg}"), kind="warn"),
-        )
+        print("ERREUR:", _e)
 
     mo.stop(
+        _error_msg is not None,
+        mo.callout(mo.md(f"Erreur : {_error_msg}"), kind="warn"),
+    )
+    mo.stop(
         articles_df.empty,
-        mo.callout(
-            mo.md("Aucun article retourné par l'API GDELT pour ces paramètres."),
-            kind="warn",
-        ),
+        mo.callout(mo.md("Aucun article retourné."), kind="warn"),
     )
     return (articles_df,)
 
@@ -89,11 +110,11 @@ def _(articles_df, mo):
         if _dtype_issues else mo.md("**Types critiques :** OK ✓"),
         mo.ui.table(articles_df.head()),
     ])
-    return (_output,)
+    return
 
 
 @app.cell
-def _(articles_df, mo, px):
+def _(articles_df, px):
     # ── Distribution par pays source ──
     _counts = (
         articles_df["sourcecountry"]
@@ -109,11 +130,11 @@ def _(articles_df, mo, px):
         title="Distribution des articles par pays source",
         labels={"Pays": "Pays source", "Nombre d'articles": "Nombre d'articles"},
     )
-    return (mo.ui.plotly(_fig),)
+    return
 
 
 @app.cell
-def _(articles_df, mo, px):
+def _(articles_df, px):
     # ── Distribution par langue ──
     _counts = (
         articles_df["language"]
@@ -129,7 +150,7 @@ def _(articles_df, mo, px):
         title="Distribution des articles par langue",
         labels={"Langue": "Langue", "Nombre d'articles": "Nombre d'articles"},
     )
-    return (mo.ui.plotly(_fig),)
+    return
 
 
 @app.cell
@@ -157,27 +178,22 @@ def _(articles_df, mo, pd, px):
         mo.md(f"{_nat_count} dates non parseables ignorées ({_nat_ratio:.0%} des lignes)."),
         kind="warn",
     ) if _nat_ratio > 0.1 else None
-    return (mo.vstack([_warning, mo.ui.plotly(_fig)]) if _warning else mo.ui.plotly(_fig),)
+    return
 
 
 @app.cell
-def _(articles_df, mo):
+def _():
     # ── Aperçu des titres ──
-    return (mo.ui.table(articles_df[["title", "domain", "sourcecountry", "seendate"]]),)
+    return
 
 
 @app.cell
-def _(DATA_RAW, articles_df, mo):
+def _(DATA_RAW, articles_df):
     # ── Sauvegarde ──
     DATA_RAW.mkdir(parents=True, exist_ok=True)
     _output_path = DATA_RAW / "articles_raw.csv"
     articles_df.to_csv(_output_path, index=False)
-    return (
-        mo.callout(
-            mo.md(f"{len(articles_df)} lignes sauvegardées dans `{_output_path}`."),
-            kind="success",
-        ),
-    )
+    return
 
 
 if __name__ == "__main__":
