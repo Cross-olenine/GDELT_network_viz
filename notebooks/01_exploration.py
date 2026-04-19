@@ -7,130 +7,61 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     # ── Imports ──
-    import time
+    import sys
     import marimo as mo
     import pandas as pd
     import plotly.express as px
     from pathlib import Path
-    from gdeltdoc import GdeltDoc, Filters
-
-    return Filters, GdeltDoc, Path, mo, pd, px, time
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from src.gdelt_client import collect_articles
+    return Path, collect_articles, mo, pd, px
 
 
 @app.cell
 def _(Path):
-    # ── Configuration ──
-    KEYWORD = "diplomatic sanctions bilateral"
-    TIMESPAN = "7days"
-    NUM_RECORDS = 25
-    DATA_RAW = Path("data/raw")
-    return DATA_RAW, KEYWORD, NUM_RECORDS, TIMESPAN
+    # ── Parametres de collecte ──
+    KEYWORD = "sanctions diplomat"
+    START_DATE = "2024-01-01"
+    END_DATE = "2024-01-31"
+    NUM_RECORDS = 250
+    DATA_RAW = Path(__file__).parent.parent / "data" / "raw"
+    return DATA_RAW, END_DATE, KEYWORD, NUM_RECORDS, START_DATE
 
 
 @app.cell
 def _(mo):
-    # ── Collecte API ──
+    # ── Bouton de collecte ──
     run_button = mo.ui.run_button(label="Lancer la collecte GDELT")
     run_button
     return (run_button,)
 
 
 @app.cell
-def _(
-    Filters,
-    GdeltDoc,
-    KEYWORD,
-    NUM_RECORDS,
-    TIMESPAN,
-    mo,
-    pd,
-    run_button,
-    time,
-):
-    # ── Exécution collecte ──
+def _(END_DATE, KEYWORD, NUM_RECORDS, START_DATE, collect_articles, mo, run_button):
+    # ── Collecte conditionnelle au clic du bouton ──
     mo.stop(not run_button.value)
-
-    _error_msg = None
-    try:
-        _gd = GdeltDoc()
-        _filters = Filters(
-            keyword=KEYWORD,
-            timespan=TIMESPAN,
-            num_records=NUM_RECORDS,
-        )
-        time.sleep(10)
-        articles_df = _gd.article_search(_filters)
-        print("Shape:", articles_df.shape)
-        print("Colonnes:", articles_df.columns.tolist())
-    except Exception as _e:
-        articles_df = pd.DataFrame()
-        _error_msg = str(_e)
-        print("ERREUR:", _e)
-
-    mo.stop(
-        _error_msg is not None,
-        mo.callout(mo.md(f"Erreur : {_error_msg}"), kind="warn"),
+    articles_df = collect_articles(
+        keyword=KEYWORD,
+        start_date=START_DATE,
+        end_date=END_DATE,
+        num_records=NUM_RECORDS,
     )
     mo.stop(
         articles_df.empty,
-        mo.callout(mo.md("Aucun article retourné."), kind="warn"),
+        mo.callout(mo.md("Aucun article retourne pour cette periode."), kind="warn"),
     )
     return (articles_df,)
 
 
 @app.cell
 def _(articles_df, mo):
-    # ── Validation du DataFrame brut ──
-    _expected_cols = [
-        "url", "url_mobile", "title", "seendate",
-        "socialimage", "domain", "language", "sourcecountry",
-    ]
-    _missing_cols = [c for c in _expected_cols if c not in articles_df.columns]
-
-    # Arrêt si des colonnes critiques manquent — les cellules aval en dépendent
-    mo.stop(
-        len(_missing_cols) > 0,
-        mo.callout(
-            mo.md(f"Colonnes manquantes dans le DataFrame : `{_missing_cols}`. Pipeline interrompu."),
-            kind="warn",
-        ),
-    )
-
-    # Validation active des dtypes critiques
-    _dtype_issues = []
-    if articles_df["seendate"].dtype != object:
-        _dtype_issues.append("`seendate` : attendu `object` (string), obtenu `{}`".format(articles_df["seendate"].dtype))
-    if articles_df["url"].dtype != object:
-        _dtype_issues.append("`url` : attendu `object` (string), obtenu `{}`".format(articles_df["url"].dtype))
-
-    _output = mo.vstack([
+    # ── Validation : shape, colonnes, valeurs manquantes ──
+    _null_counts = articles_df[["url", "title", "seendate"]].isnull().sum()
+    return mo.vstack([
         mo.md(f"**Shape :** `{articles_df.shape}`"),
-        mo.md(f"**Types (dtypes) :**\n```\n{articles_df.dtypes.to_string()}\n```"),
-        mo.callout(mo.md("Problèmes de types : " + " | ".join(_dtype_issues)), kind="warn")
-        if _dtype_issues else mo.md("**Types critiques :** OK ✓"),
-        mo.ui.table(articles_df.head()),
+        mo.md(f"**Colonnes :** `{articles_df.columns.tolist()}`"),
+        mo.md(f"**Valeurs manquantes :**\n```\n{_null_counts.to_string()}\n```"),
     ])
-    return
-
-
-@app.cell
-def _(articles_df, px):
-    # ── Distribution par pays source ──
-    _counts = (
-        articles_df["sourcecountry"]
-        .value_counts()
-        .reset_index()
-        .rename(columns={"sourcecountry": "Pays", "count": "Nombre d'articles"})
-    )
-    _fig = px.bar(
-        _counts,
-        x="Nombre d'articles",
-        y="Pays",
-        orientation="h",
-        title="Distribution des articles par pays source",
-        labels={"Pays": "Pays source", "Nombre d'articles": "Nombre d'articles"},
-    )
-    return
 
 
 @app.cell
@@ -142,58 +73,85 @@ def _(articles_df, px):
         .reset_index()
         .rename(columns={"language": "Langue", "count": "Nombre d'articles"})
     )
-    _fig = px.bar(
+    return px.bar(
         _counts,
         x="Nombre d'articles",
         y="Langue",
         orientation="h",
         title="Distribution des articles par langue",
-        labels={"Langue": "Langue", "Nombre d'articles": "Nombre d'articles"},
+        height=max(400, len(_counts) * 25),
     )
-    return
 
 
 @app.cell
-def _(articles_df, mo, pd, px):
-    # ── Distribution temporelle ──
-    _df_time = articles_df.copy()
-    _df_time["date"] = pd.to_datetime(
-        _df_time["seendate"], format="%Y%m%dT%H%M%SZ", errors="coerce"
+def _(articles_df, px):
+    # ── Distribution par pays source ──
+    _counts = (
+        articles_df["sourcecountry"]
+        .value_counts()
+        .reset_index()
+        .rename(columns={"sourcecountry": "Pays", "count": "Nombre d'articles"})
     )
-    # Avertissement si des dates n'ont pas pu être parsées
-    _nat_count = _df_time["date"].isna().sum()
-    _nat_ratio = _nat_count / len(_df_time)
-    _df_time = _df_time.dropna(subset=["date"])
-    _df_time["jour"] = _df_time["date"].dt.date
-    _counts = _df_time.groupby("jour").size().reset_index(name="Nombre d'articles")
-    _fig = px.line(
+    return px.bar(
+        _counts,
+        x="Nombre d'articles",
+        y="Pays",
+        orientation="h",
+        title="Distribution des articles par pays source",
+        height=max(400, len(_counts) * 25),
+    )
+
+
+@app.cell
+def _(articles_df, px):
+    # ── Distribution temporelle par jour ──
+    _df = articles_df.dropna(subset=["seendate"]).copy()
+    _df["jour"] = _df["seendate"].dt.date
+    _counts = _df.groupby("jour").size().reset_index(name="Nombre d'articles")
+    return px.line(
         _counts,
         x="jour",
         y="Nombre d'articles",
         title="Nombre d'articles par jour",
-        labels={"jour": "Date", "Nombre d'articles": "Nombre d'articles"},
         markers=True,
     )
-    _warning = mo.callout(
-        mo.md(f"{_nat_count} dates non parseables ignorées ({_nat_ratio:.0%} des lignes)."),
-        kind="warn",
-    ) if _nat_ratio > 0.1 else None
-    return
 
 
 @app.cell
-def _():
-    # ── Aperçu des titres ──
-    return
+def _(articles_df, px):
+    # ── Top 20 domaines de presse ──
+    _counts = (
+        articles_df["domain"]
+        .value_counts()
+        .head(20)
+        .reset_index()
+        .rename(columns={"domain": "Domaine", "count": "Nombre d'articles"})
+    )
+    return px.bar(
+        _counts,
+        x="Nombre d'articles",
+        y="Domaine",
+        orientation="h",
+        title="Top 20 domaines de presse",
+        height=max(400, len(_counts) * 25),
+    )
 
 
 @app.cell
-def _(DATA_RAW, articles_df):
-    # ── Sauvegarde ──
+def _(articles_df, mo):
+    # ── Apercu des titres ──
+    return mo.ui.table(
+        articles_df[["title", "domain", "seendate", "sourcecountry"]]
+    )
+
+
+@app.cell
+def _(DATA_RAW, articles_df, mo):
+    # ── Sauvegarde en data/raw/articles_eda.csv ──
     DATA_RAW.mkdir(parents=True, exist_ok=True)
-    _output_path = DATA_RAW / "articles_raw.csv"
+    _output_path = DATA_RAW / "articles_eda.csv"
     articles_df.to_csv(_output_path, index=False)
-    return
+    return mo.md(f"Fichier sauvegarde : `{_output_path}` ({len(articles_df)} lignes)")
 
 
 if __name__ == "__main__":
