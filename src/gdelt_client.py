@@ -37,7 +37,7 @@ def collect_articles(
     """
     num_records = min(num_records, 250)
 
-    print(f"[{datetime.now().isoformat()}] Requête GDELT : keyword='{keyword}', {start_date} → {end_date}, num_records={num_records}")
+    print(f"[{datetime.now().isoformat()}] Requete GDELT : keyword='{keyword}', {start_date} -> {end_date}, num_records={num_records}")
 
     try:
         gdelt_client = GdeltDoc()

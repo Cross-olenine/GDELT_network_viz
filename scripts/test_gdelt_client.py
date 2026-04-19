@@ -1,15 +1,23 @@
 import sys
 from pathlib import Path
 
-# Ajoute la racine du projet au path pour pouvoir importer src/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.gdelt_client import collect_articles
 
-df = collect_articles(keyword="diplomacy", timespan="7days", num_records=5)
+articles_df = collect_articles(
+    keyword="diplomatic sanctions",
+    start_date="2024-03-01",
+    end_date="2024-03-03",
+    num_records=10,
+)
 
-print(f"Shape    : {df.shape}")
-print(f"Colonnes : {df.columns.tolist()}")
+if articles_df.empty:
+    print("\nAucun article retourné pour cette période.")
+    sys.exit(0)
+
+print(f"\nShape     : {articles_df.shape}")
+print(f"Colonnes  : {articles_df.columns.tolist()}")
 print("\nTitres récupérés :")
-for i, title in enumerate(df["title"], start=1):
+for i, title in enumerate(articles_df["title"], start=1):
     print(f"  {i}. {title}")
