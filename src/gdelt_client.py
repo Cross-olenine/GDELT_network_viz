@@ -1,7 +1,9 @@
+import time
 from datetime import datetime
 
 import pandas as pd
 from gdeltdoc import Filters, GdeltDoc
+from gdeltdoc.errors import RateLimitError
 
 # Colonnes garanties par la DOC API GDELT
 EXPECTED_COLUMNS = [
@@ -13,8 +15,9 @@ EXPECTED_COLUMNS = [
     "domain",
     "language",
     "sourcecountry",
-    "tone",
 ]
+
+_RETRY_DELAYS = [10, 30, 60]
 
 
 def collect_articles(
@@ -39,34 +42,45 @@ def collect_articles(
 
     print(f"[{datetime.now().isoformat()}] Requete GDELT : keyword='{keyword}', {start_date} -> {end_date}, num_records={num_records}")
 
-    try:
-        gdelt_client = GdeltDoc()
-        filters = Filters(
-            keyword=keyword,
-            start_date=start_date,
-            end_date=end_date,
-            num_records=num_records,
-            language="English",
-        )
-        articles_df = gdelt_client.article_search(filters)
-    except Exception as e:
-        print(f"[gdelt_client] Erreur lors de l'appel API : {e}")
-        return pd.DataFrame(columns=EXPECTED_COLUMNS)
+    gdelt_client = GdeltDoc()
+    filters = Filters(
+        keyword=keyword,
+        start_date=start_date,
+        end_date=end_date,
+        num_records=num_records,
+        language="English",
+    )
 
-    if articles_df.empty:
-        print("[gdelt_client] Aucun article retourné pour cette période.")
+    articles_df = None
+    for attempt, delay in enumerate([0] + _RETRY_DELAYS, start=1):
+        if delay:
+            print(f"[gdelt_client] Rate limit atteint — attente {delay}s (tentative {attempt}/{1 + len(_RETRY_DELAYS)})...")
+            time.sleep(delay)
+        try:
+            articles_df = gdelt_client.article_search(filters)
+            break
+        except RateLimitError:
+            if attempt > len(_RETRY_DELAYS):
+                print("[gdelt_client] Rate limit persistant apres toutes les tentatives.")
+                return pd.DataFrame(columns=EXPECTED_COLUMNS)
+        except Exception as e:
+            print(f"[gdelt_client] Erreur lors de l'appel API : {type(e).__name__}: {e}")
+            return pd.DataFrame(columns=EXPECTED_COLUMNS)
+
+    if articles_df is None or articles_df.empty:
+        print("[gdelt_client] Aucun article retourne pour cette periode.")
         return pd.DataFrame(columns=EXPECTED_COLUMNS)
 
     # Validation des colonnes retournées
     missing = [col for col in EXPECTED_COLUMNS if col not in articles_df.columns]
     if missing:
-        print(f"[gdelt_client] Colonnes manquantes dans la réponse : {missing}")
+        print(f"[gdelt_client] Colonnes manquantes dans la reponse : {missing}")
         return pd.DataFrame(columns=EXPECTED_COLUMNS)
 
     # Validation des dtypes et valeurs nulles critiques
     null_counts = articles_df[["url", "title", "seendate"]].isnull().sum()
     if null_counts.any():
-        print(f"[gdelt_client] Valeurs nulles détectées : {null_counts[null_counts > 0].to_dict()}")
+        print(f"[gdelt_client] Valeurs nulles detectees : {null_counts[null_counts > 0].to_dict()}")
 
     articles_df["seendate"] = pd.to_datetime(
         articles_df["seendate"], format="%Y%m%dT%H%M%SZ", errors="coerce"

@@ -6,9 +6,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.gdelt_client import collect_articles
 
 articles_df = collect_articles(
-    keyword="diplomatic sanctions",
-    start_date="2024-03-01",
-    end_date="2024-03-03",
+    keyword="sanctions",
+    start_date="2024-01-01",
+    end_date="2024-01-31",
     num_records=10,
 )
 
