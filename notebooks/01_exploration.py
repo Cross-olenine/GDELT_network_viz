@@ -40,6 +40,7 @@ def _(mo):
 def _(END_DATE, KEYWORD, NUM_RECORDS, START_DATE, collect_articles, mo, run_button):
     # ── Collecte conditionnelle au clic du bouton ──
     mo.stop(not run_button.value)
+
     articles_df = collect_articles(
         keyword=KEYWORD,
         start_date=START_DATE,
@@ -57,11 +58,12 @@ def _(END_DATE, KEYWORD, NUM_RECORDS, START_DATE, collect_articles, mo, run_butt
 def _(articles_df, mo):
     # ── Validation : shape, colonnes, valeurs manquantes ──
     _null_counts = articles_df[["url", "title", "seendate"]].isnull().sum()
-    return mo.vstack([
+    _validation = mo.vstack([
         mo.md(f"**Shape :** `{articles_df.shape}`"),
         mo.md(f"**Colonnes :** `{articles_df.columns.tolist()}`"),
         mo.md(f"**Valeurs manquantes :**\n```\n{_null_counts.to_string()}\n```"),
     ])
+    _validation
 
 
 @app.cell
@@ -73,7 +75,7 @@ def _(articles_df, px):
         .reset_index()
         .rename(columns={"language": "Langue", "count": "Nombre d'articles"})
     )
-    return px.bar(
+    _fig = px.bar(
         _counts,
         x="Nombre d'articles",
         y="Langue",
@@ -81,6 +83,7 @@ def _(articles_df, px):
         title="Distribution des articles par langue",
         height=max(400, len(_counts) * 25),
     )
+    _fig
 
 
 @app.cell
@@ -92,7 +95,7 @@ def _(articles_df, px):
         .reset_index()
         .rename(columns={"sourcecountry": "Pays", "count": "Nombre d'articles"})
     )
-    return px.bar(
+    _fig = px.bar(
         _counts,
         x="Nombre d'articles",
         y="Pays",
@@ -100,6 +103,7 @@ def _(articles_df, px):
         title="Distribution des articles par pays source",
         height=max(400, len(_counts) * 25),
     )
+    _fig
 
 
 @app.cell
@@ -108,13 +112,14 @@ def _(articles_df, px):
     _df = articles_df.dropna(subset=["seendate"]).copy()
     _df["jour"] = _df["seendate"].dt.date
     _counts = _df.groupby("jour").size().reset_index(name="Nombre d'articles")
-    return px.line(
+    _fig = px.line(
         _counts,
         x="jour",
         y="Nombre d'articles",
         title="Nombre d'articles par jour",
         markers=True,
     )
+    _fig
 
 
 @app.cell
@@ -127,7 +132,7 @@ def _(articles_df, px):
         .reset_index()
         .rename(columns={"domain": "Domaine", "count": "Nombre d'articles"})
     )
-    return px.bar(
+    _fig = px.bar(
         _counts,
         x="Nombre d'articles",
         y="Domaine",
@@ -135,14 +140,16 @@ def _(articles_df, px):
         title="Top 20 domaines de presse",
         height=max(400, len(_counts) * 25),
     )
+    _fig
 
 
 @app.cell
 def _(articles_df, mo):
     # ── Apercu des titres ──
-    return mo.ui.table(
+    _table = mo.ui.table(
         articles_df[["title", "domain", "seendate", "sourcecountry"]]
     )
+    _table
 
 
 @app.cell
@@ -150,8 +157,12 @@ def _(DATA_RAW, articles_df, mo):
     # ── Sauvegarde en data/raw/articles_eda.csv ──
     DATA_RAW.mkdir(parents=True, exist_ok=True)
     _output_path = DATA_RAW / "articles_eda.csv"
-    articles_df.to_csv(_output_path, index=False)
-    return mo.md(f"Fichier sauvegarde : `{_output_path}` ({len(articles_df)} lignes)")
+    articles_df.to_csv(_output_path, index=False, encoding="utf-8")
+    _confirmation = mo.callout(
+        mo.md(f"Fichier sauvegarde : `{_output_path}` ({len(articles_df)} lignes)"),
+        kind="success",
+    )
+    _confirmation
 
 
 if __name__ == "__main__":
