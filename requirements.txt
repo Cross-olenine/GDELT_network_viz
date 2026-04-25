@@ -5,3 +5,4 @@ networkx==3.4.2
 marimo==0.10.12
 pyvis==0.3.2
 plotly==5.24.1
+polars==1.40.1
