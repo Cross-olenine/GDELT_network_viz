@@ -13,3 +13,8 @@ notebooks/_marimo_cache/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Pipeline
+data/parquet/
+pipeline/__pycache__/
+.prefect/
