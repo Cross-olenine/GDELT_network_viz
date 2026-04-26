@@ -66,13 +66,16 @@ def convert(month: str) -> None:
     csv_size_mb = csv_path.stat().st_size / 1_048_576
     logger.info("Source : %s (%.1f MB)", csv_path.name, csv_size_mb)
 
+    col_types = {name: "VARCHAR" for name in GDELT_COLUMNS}
+
     query = f"""
         COPY (
             SELECT * FROM read_csv(
                 '{csv_path.as_posix()}',
-                delim='\\t',
+                delim=',',
                 header=false,
-                names={GDELT_COLUMNS!r},
+                skip=1,
+                columns={col_types!r},
                 auto_detect=false
             )
         )
