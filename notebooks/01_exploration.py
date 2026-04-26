@@ -198,7 +198,46 @@ def _(Path, con):
 
 
 @app.cell
-def _():
+def _(con):
+    relations = con.execute("""
+        SELECT 
+            Actor1CountryCode,
+            Actor2CountryCode,
+            COUNT(*) as nb_interactions
+        FROM events
+        WHERE Year = 2026
+          AND Actor1CountryCode IS NOT NULL
+          AND Actor2CountryCode IS NOT NULL
+          AND Actor1CountryCode != Actor2CountryCode
+          AND EventRootCode IN ('03','04','05','06','07','08')
+        GROUP BY Actor1CountryCode, Actor2CountryCode
+        ORDER BY nb_interactions DESC
+    """).df()
+
+    print(f"Nombre de relations uniques : {len(relations)}")
+    print(f"Nombre de pays uniques : {relations['Actor1CountryCode'].nunique()}")
+    relations.head(10)
+
+    print(f"Nombre de relations uniques : {len(relations)}")
+    print(f"Nombre de pays uniques Actor1 : {relations['Actor1CountryCode'].nunique()}")
+    print(f"Nombre de pays uniques Actor2 : {relations['Actor2CountryCode'].nunique()}")
+    return (relations,)
+
+
+@app.cell
+def _(relations):
+    import sys
+    sys.path.insert(0, "..")
+    from src.graph_builder import build_graph
+
+    G = build_graph(relations)
+
+    print(f"Noeuds : {G.number_of_nodes()}")
+    print(f"Arêtes : {G.number_of_edges()}")
+    print(f"Top 5 pays les plus connectés :")
+    top = sorted(G.degree(weight="weight"), key=lambda x: x[1], reverse=True)[:5]
+    for pays, poids in top:
+        print(f"  {pays} : {poids:,} interactions")
     return
 
 
