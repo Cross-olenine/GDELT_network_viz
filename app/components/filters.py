@@ -58,10 +58,18 @@ def render(parquet_dir: Path) -> dict:
 
     st.sidebar.markdown("---")
     st.sidebar.caption(
-        "**Légende couleurs**\n\n"
-        "🔴 Ton négatif (conflictuel)\n\n"
-        "🟡 Ton neutre\n\n"
-        "🟢 Ton positif (coopératif)\n\n"
+        "**Couleur des nœuds — Continent**\n\n"
+        "🟠 Afrique\n\n"
+        "🔵 Europe\n\n"
+        "🔴 Asie\n\n"
+        "🟢 Amériques\n\n"
+        "🟣 Océanie\n\n"
+        "⚫ Inconnu\n\n"
+        "---\n\n"
+        "**Couleur des arêtes — Ton médiatique**\n\n"
+        "🔴 Négatif (conflictuel)\n\n"
+        "🟡 Neutre\n\n"
+        "🟢 Positif (coopératif)\n\n"
         "Épaisseur = nb d'interactions"
     )
 

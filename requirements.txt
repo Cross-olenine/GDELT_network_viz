@@ -9,4 +9,5 @@ polars==1.40.1
 pyarrow==24.0.0
 duckdb==1.5.2
 pycountry==26.2.16
+pycountry-convert==0.7.2
 streamlit==1.56.0
