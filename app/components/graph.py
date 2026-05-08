@@ -1,22 +1,20 @@
 """
-Rendu du knowledge graph diplomatique via Vis.js.
+Rendu de la carte diplomatique via Leaflet.js.
 Génère un HTML autonome injecté dans Streamlit via st.components.v1.html.
-Utilise pyvis avec cdn_resources="in_line" pour bundler vis-network.min.js
-directement dans le HTML — contourne le blocage CDN des iframes Streamlit
-(origine nulle du srcdoc empêche le chargement de scripts externes).
+Leaflet CSS + JS sont téléchargés une fois et inlinés — contourne le blocage
+CDN des iframes Streamlit (origine nulle du srcdoc empêche le chargement
+de scripts externes).
 """
 import json
 import math
 
+import requests
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from pyvis.network import Network
 
 # ---------------------------------------------------------------------------
 # Coordonnées géographiques (latitude, longitude) par code ISO alpha-3.
-# Latitude brute : la négation est appliquée au rendu (Y = -lat) pour que
-# le Nord soit en haut dans le canvas Vis.js.
 # ---------------------------------------------------------------------------
 _COUNTRY_COORDS: dict[str, tuple[float, float]] = {
     "AFG": (33.93, 67.71),   "ALB": (41.15, 20.17),   "DZA": (28.03, 1.66),
@@ -101,7 +99,7 @@ try:
         return c.name if c else code
 
     def _continent_color(code: str) -> str:
-        """Retourne la couleur hex du nœud selon le continent du pays."""
+        """Retourne la couleur hex du marqueur selon le continent du pays."""
         try:
             c = _pycountry.countries.get(alpha_3=code)
             if c is None:
@@ -113,9 +111,11 @@ try:
 
 except ImportError:
     def _country_name(code: str) -> str:
+        """Retourne le code tel quel si pycountry est indisponible."""
         return code
 
     def _continent_color(code: str) -> str:
+        """Retourne le gris fallback si pycountry_convert est indisponible."""
         return "#95A5A6"
 
 
@@ -129,153 +129,275 @@ def _tone_to_color(tone: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def _edge_width(nb: int, max_nb: int) -> float:
-    """Normalise l'épaisseur d'arête (0.5-4) par log sur nb_interactions."""
+def _polyline_weight(nb: int, max_nb: int) -> float:
+    """Normalise l'épaisseur de polyline (1–8 px) par log sur nb_interactions."""
     if max_nb <= 1:
-        return 0.5
-    return 0.5 + 3.5 * math.log1p(nb) / math.log1p(max_nb)
+        return 1.0
+    return 1.0 + 7.0 * math.log1p(nb) / math.log1p(max_nb)
 
 
-# Échelle de projection lon/lat → unités Vis.js
-_GEO_SCALE = 12.0
+@st.cache_resource
+def _get_leaflet_bundle() -> tuple[str, str]:
+    """Télécharge et met en cache Leaflet CSS + JS depuis unpkg.
+
+    Returns:
+        Tuple (leaflet_css, leaflet_js) en tant que strings.
+
+    Raises:
+        requests.RequestException: si le téléchargement échoue.
+    """
+    base = "https://unpkg.com/leaflet@1.9.4/dist/leaflet"
+    css_resp = requests.get(f"{base}.css", timeout=15)
+    css_resp.raise_for_status()
+    js_resp = requests.get(f"{base}.js", timeout=15)
+    js_resp.raise_for_status()
+    return css_resp.text, js_resp.text
+
+
+def _build_map_data(
+    relations: pd.DataFrame,
+    degree: dict[str, int],
+) -> tuple[list[dict], list[dict]]:
+    """Construit les listes JSON de nœuds et d'arêtes pour le template Leaflet.
+
+    Args:
+        relations: DataFrame filtré avec colonnes Actor1/2CountryCode,
+                   nb_interactions, avg_tone, avg_goldstein.
+        degree: mapping code ISO alpha-3 → nombre d'arêtes connectées.
+
+    Returns:
+        Tuple (nodes, edges) de listes de dicts sérialisables en JSON.
+    """
+    countries = set(relations["Actor1CountryCode"]) | set(relations["Actor2CountryCode"])
+    country_names = {code: _country_name(code) for code in countries}
+    max_nb = int(relations["nb_interactions"].max())
+
+    nodes: list[dict] = []
+    for code in countries:
+        coords = _COUNTRY_COORDS.get(code)
+        if coords is None:
+            continue
+        lat, lon = coords
+        nodes.append({
+            "code": code,
+            "name": country_names[code],
+            "lat": lat,
+            "lon": lon,
+            "color": _continent_color(code),
+            "radius": 5 + min(degree.get(code, 1), 15),
+            "connections": degree.get(code, 0),
+        })
+
+    edge_weights = relations["nb_interactions"].map(
+        lambda n: _polyline_weight(int(n), max_nb)
+    ).tolist()
+    edges: list[dict] = []
+    for a1, a2, nb, tone, ew in zip(
+        relations["Actor1CountryCode"],
+        relations["Actor2CountryCode"],
+        relations["nb_interactions"].astype(int),
+        relations["avg_tone"],
+        edge_weights,
+    ):
+        if _COUNTRY_COORDS.get(a1) is None or _COUNTRY_COORDS.get(a2) is None:
+            continue
+        edges.append({
+            "a1": a1,
+            "a2": a2,
+            "name1": country_names.get(a1, a1),
+            "name2": country_names.get(a2, a2),
+            "nb": int(nb),
+            "tone": round(float(tone), 2),
+            "color": _tone_to_color(float(tone)),
+            "weight": round(ew, 2),
+        })
+
+    return nodes, edges
+
+
+# Template JS Leaflet — __NODES__ et __EDGES__ sont remplacés par json.dumps()
+# avant injection. Pas de f-string : les accolades JS ne sont pas échappées.
+_LEAFLET_JS_TEMPLATE = """\
+var NODES = __NODES__;
+var EDGES = __EDGES__;
+
+var map = L.map('map');
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> \
+contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+
+var markerMap = {};
+var polylineList = [];
+var originalPositions = {};
+
+function createMarkerIcon(color, radius) {
+    var size = radius * 2;
+    return L.divIcon({
+        className: '',
+        html: '<div style="width:' + size + 'px;height:' + size + 'px;' +
+              'background:' + color + ';border-radius:50%;' +
+              'border:1.5px solid rgba(255,255,255,0.7);' +
+              'box-shadow:0 0 6px rgba(0,0,0,0.5);cursor:grab;"></div>',
+        iconSize: [size, size],
+        iconAnchor: [radius, radius],
+        tooltipAnchor: [radius + 2, -radius]
+    });
+}
+
+function updatePolylines(code) {
+    polylineList.forEach(function(p) {
+        if (p.a1 === code || p.a2 === code) {
+            var ll1 = markerMap[p.a1].getLatLng();
+            var ll2 = markerMap[p.a2].getLatLng();
+            p.polyline.setLatLngs([[ll1.lat, ll1.lng], [ll2.lat, ll2.lng]]);
+        }
+    });
+}
+
+NODES.forEach(function(n) {
+    originalPositions[n.code] = [n.lat, n.lon];
+    var marker = L.marker([n.lat, n.lon], {
+        icon: createMarkerIcon(n.color, n.radius),
+        draggable: true
+    });
+    marker.bindTooltip(
+        '<b>' + n.name + '</b><br>Connexions : ' + n.connections,
+        {sticky: true, direction: 'top', offset: [0, -n.radius - 4]}
+    );
+    markerMap[n.code] = marker;
+    marker.addTo(map);
+    marker.on('drag', (function(code) {
+        return function() { updatePolylines(code); };
+    })(n.code));
+});
+
+EDGES.forEach(function(e) {
+    var m1 = markerMap[e.a1];
+    var m2 = markerMap[e.a2];
+    if (!m1 || !m2) return;
+    var ll1 = m1.getLatLng();
+    var ll2 = m2.getLatLng();
+    var polyline = L.polyline([[ll1.lat, ll1.lng], [ll2.lat, ll2.lng]], {
+        color: e.color,
+        weight: e.weight,
+        opacity: 0.6
+    });
+    polyline.bindTooltip(
+        '<b>' + e.name1 + ' ⇔ ' + e.name2 + '</b>' +
+        '<br>Interactions : ' + e.nb +
+        '<br>AvgTone : ' + e.tone.toFixed(2),
+        {sticky: true}
+    );
+    polylineList.push({polyline: polyline, a1: e.a1, a2: e.a2});
+    polyline.addTo(map);
+});
+
+var allLatLngs = NODES.map(function(n) { return [n.lat, n.lon]; });
+if (allLatLngs.length > 0) {
+    map.fitBounds(L.latLngBounds(allLatLngs), {padding: [30, 30]});
+}
+
+document.getElementById('reset-btn').addEventListener('click', function() {
+    Object.keys(markerMap).forEach(function(code) {
+        markerMap[code].setLatLng(originalPositions[code]);
+        updatePolylines(code);
+    });
+    if (allLatLngs.length > 0) {
+        map.fitBounds(L.latLngBounds(allLatLngs), {padding: [30, 30]});
+    }
+});
+
+setTimeout(function() { map.invalidateSize(); }, 200);
+"""
+
+
+def _build_leaflet_html(
+    nodes: list[dict],
+    edges: list[dict],
+    leaflet_css: str,
+    leaflet_js: str,
+    height: int,
+) -> str:
+    """Génère le HTML autonome avec carte Leaflet embarquée.
+
+    Args:
+        nodes: liste de dicts nœuds produite par _build_map_data.
+        edges: liste de dicts arêtes produite par _build_map_data.
+        leaflet_css: contenu du fichier leaflet.css (inliné).
+        leaflet_js: contenu du fichier leaflet.js (inliné).
+        height: hauteur du div carte en pixels.
+
+    Returns:
+        String HTML complète prête pour st.components.v1.html.
+    """
+    nodes_json = json.dumps(nodes, ensure_ascii=False)
+    edges_json = json.dumps(edges, ensure_ascii=False)
+
+    js_code = (
+        _LEAFLET_JS_TEMPLATE
+        .replace("__NODES__", nodes_json)
+        .replace("__EDGES__", edges_json)
+    )
+
+    css_overrides = (
+        "* { margin:0; padding:0; box-sizing:border-box; }"
+        "body { background:#0E1117; overflow:hidden; }"
+        "#map { width:100%; height:" + str(height) + "px; }"
+        "#reset-btn {"
+        " position:absolute; top:60px; right:10px; z-index:1000;"
+        " background:#161B22; color:#FAFAFA; border:1px solid #3498DB;"
+        " padding:6px 14px; cursor:pointer; border-radius:4px;"
+        " font-size:13px; font-family:sans-serif;"
+        "}"
+        "#reset-btn:hover { background:#3498DB; }"
+    )
+
+    return (
+        "<!DOCTYPE html>"
+        "<html><head><meta charset='utf-8'/>"
+        "<style>" + css_overrides + leaflet_css + "</style>"
+        "</head><body>"
+        "<button id='reset-btn'>Reset</button>"
+        "<div id='map'></div>"
+        "<script>" + leaflet_js + "</script>"
+        "<script>" + js_code + "</script>"
+        "</body></html>"
+    )
 
 
 def render(relations: pd.DataFrame, height: int = 900) -> None:
     """
-    Construit et affiche le graph Vis.js à partir des relations filtrées.
+    Construit et affiche la carte Leaflet à partir des relations filtrées.
 
     Args:
         relations: DataFrame avec colonnes Actor1CountryCode, Actor2CountryCode,
                    nb_interactions, avg_tone, avg_goldstein.
-        height: Hauteur du canvas Vis.js en pixels.
+        height: Hauteur du canvas en pixels.
     """
     if relations.empty:
         st.warning("Aucune relation à afficher avec les filtres actuels.")
         return
 
-    max_nb = int(relations["nb_interactions"].max())
+    try:
+        leaflet_css, leaflet_js = _get_leaflet_bundle()
+    except requests.RequestException as exc:
+        st.error(f"Impossible de charger Leaflet.js ({exc}). Vérifiez votre connexion.")
+        return
 
-    # Degré de chaque pays (nombre d'arêtes) — vectorisé
     degree: dict = (
         pd.concat([relations["Actor1CountryCode"], relations["Actor2CountryCode"]])
         .value_counts()
         .to_dict()
     )
 
-    net = Network(
-        height=f"{height}px",
-        width="100%",
-        bgcolor="#0E1117",
-        font_color="#FAFAFA",
-        notebook=False,
-        cdn_resources="in_line",
-    )
+    nodes, edges = _build_map_data(relations, degree)
 
-    # Noeuds : couleur continent + position géographique initiale
-    countries = set(relations["Actor1CountryCode"]) | set(relations["Actor2CountryCode"])
-    # Pré-calcul unique des noms complets — réutilisé dans les titres arêtes
-    country_names = {code: _country_name(code) for code in countries}
-    for code in countries:
-        name = country_names[code]
-        size = 5 + min(degree.get(code, 1), 20)
-        color = _continent_color(code)
+    if not nodes:
+        st.warning("Aucun pays avec coordonnées GPS disponibles pour les filtres actuels.")
+        return
 
-        coords = _COUNTRY_COORDS.get(code)
-        node_kwargs: dict = dict(
-            label=code,
-            title=f"<b>{name}</b><br>Connexions : {degree.get(code, 0)}",
-            size=size,
-            color=color,
-        )
-        if coords is not None:
-            lat, lon = coords
-            # Y inversé : latitude croissante vers le haut
-            node_kwargs["x"] = lon * _GEO_SCALE
-            node_kwargs["y"] = -lat * _GEO_SCALE
-
-        net.add_node(code, **node_kwargs)
-
-    # Pré-calcul vectorisé des attributs d'arête
-    edge_colors = relations["avg_tone"].map(_tone_to_color).tolist()
-    edge_widths = [_edge_width(int(n), max_nb) for n in relations["nb_interactions"]]
-
-    # Arêtes : itération sur listes Python, pas sur le DataFrame
-    for a1, a2, nb, tone, gold, ec, ew in zip(
-        relations["Actor1CountryCode"],
-        relations["Actor2CountryCode"],
-        relations["nb_interactions"].astype(int),
-        relations["avg_tone"],
-        relations["avg_goldstein"],
-        edge_colors,
-        edge_widths,
-    ):
-        net.add_edge(
-            a1,
-            a2,
-            title=(
-                f"<b>{country_names.get(a1, a1)} ↔ {country_names.get(a2, a2)}</b>"
-                f"<br>Interactions : {nb}"
-                f"<br>AvgTone : {float(tone):.2f}"
-                f"<br>Goldstein : {float(gold):.2f}"
-            ),
-            width=ew,
-            color={"color": ec, "opacity": 0.6},
-        )
-
-    net.set_options(
-        json.dumps(
-            {
-                "physics": {
-                    "enabled": True,
-                    "stabilization": {"iterations": 500, "fit": True},
-                    "barnesHut": {
-                        "gravitationalConstant": -12000,
-                        "springLength": 400,
-                        "damping": 0.09,
-                        "centralGravity": 0.1,
-                    },
-                },
-                "edges": {
-                    "smooth": {"type": "continuous"},
-                    "scaling": {"min": 0.5, "max": 4},
-                },
-                "nodes": {
-                    "shape": "dot",
-                    "borderWidth": 1,
-                    "font": {"size": 10, "color": "#FAFAFA"},
-                },
-                "interaction": {
-                    "hover": True,
-                    "tooltipDelay": 100,
-                    "navigationButtons": True,
-                },
-            }
-        )
-    )
-
-    html = net.generate_html(notebook=False)
-
-    # Vis.js 9+ traite les title string comme textContent (échappés) et non
-    # comme innerHTML — on convertit chaque title en élément DOM pour que
-    # le HTML des tooltips soit effectivement rendu.
-    dom_title_js = (
-        "[nodes, edges].forEach(function(ds) {\n"
-        "    ds.forEach(function(item) {\n"
-        "        if (item.title && typeof item.title === 'string') {\n"
-        "            var div = document.createElement('div');\n"
-        "            div.innerHTML = item.title;\n"
-        "            ds.update({ id: item.id, title: div });\n"
-        "        }\n"
-        "    });\n"
-        "});\n"
-    )
-    # Coupe la physique dès la fin de la stabilisation : le drag ne propage
-    # plus aux voisins.
-    listener_js = (
-        "network.on('stabilizationIterationsDone', function() {\n"
-        "    network.setOptions({ physics: { enabled: false } });\n"
-        "});\n"
-    )
-    html = html.replace("return network;", dom_title_js + listener_js + "return network;", 1)
-
+    html = _build_leaflet_html(nodes, edges, leaflet_css, leaflet_js, height)
     components.html(html, height=height + 10, scrolling=False)
