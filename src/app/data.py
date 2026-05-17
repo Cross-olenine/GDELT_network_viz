@@ -52,7 +52,7 @@ def load_day_level_edges() -> pd.DataFrame:
     if not paths:
         return pd.DataFrame(columns=[
             "sqldate", "actor1_code", "actor2_code", "goldstein_category",
-            "weighted_sum", "weight_sum", "num_mentions",
+            "weighted_sum", "weight_sum", "num_mentions", "event_count",
         ])
     path_list = ", ".join(f"'{p}'" for p in paths)
     query = f"""
@@ -63,7 +63,8 @@ def load_day_level_edges() -> pd.DataFrame:
         goldstein_category,
         SUM(LN(1 + NumMentions) * GoldsteinScale)  AS weighted_sum,
         SUM(LN(1 + NumMentions))                   AS weight_sum,
-        SUM(NumMentions)                           AS num_mentions
+        SUM(NumMentions)                           AS num_mentions,
+        COUNT(*)                                   AS event_count
     FROM read_parquet([{path_list}])
     WHERE Actor1CountryCode != Actor2CountryCode
       AND edge_type = 'strict'
@@ -112,11 +113,13 @@ def load_edges_range(
         weighted_sum=("weighted_sum", "sum"),
         weight_sum=("weight_sum", "sum"),
         num_mentions=("num_mentions", "sum"),
+        count=("event_count", "sum"),
     )
     agg = agg[agg["weight_sum"] > 0].copy()
     agg["goldstein_scale"] = agg["weighted_sum"] / agg["weight_sum"]
     agg["num_mentions"] = agg["num_mentions"].astype(int)
+    agg["count"] = agg["count"].astype(int)
     return agg[[
         "actor1_code", "actor2_code", "goldstein_category",
-        "goldstein_scale", "num_mentions",
+        "goldstein_scale", "num_mentions", "count",
     ]].to_dict(orient="records")
