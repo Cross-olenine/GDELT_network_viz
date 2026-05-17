@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from data import load_edges, list_available_months, GoldsteinFilter
+from data import load_edges_range, list_available_months, ym_label, GoldsteinFilter
 
 _ROOT = Path(__file__).parent.parent.parent
 _COMPONENT = Path(__file__).parent / "components" / "network_map.html"
@@ -19,19 +19,23 @@ st.set_page_config(
 
 # ── Available months ──────────────────────────────────────────────────────
 available = list_available_months()
-month_labels = {(y, m): f"{y}-{m:02d}" for y, m in available}
 
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Filtres")
 
-    selected_label = st.selectbox(
-        "Période",
-        options=list(month_labels.values()),
-        index=len(month_labels) - 1,  # default: last available month
-    )
-    selected_ym = next(ym for ym, lbl in month_labels.items() if lbl == selected_label)
-    sel_year, sel_month = selected_ym
+    if len(available) >= 2:
+        idx_min, idx_max = st.select_slider(
+            "Période",
+            options=list(range(len(available))),
+            value=(0, len(available) - 1),
+            format_func=lambda i: ym_label(*available[i]),
+        )
+    else:
+        idx_min, idx_max = 0, max(0, len(available) - 1)
+
+    from_ym = available[idx_min]
+    to_ym   = available[idx_max]
 
     goldstein_filter: GoldsteinFilter = st.radio(  # type: ignore[assignment]
         "Goldstein category",
@@ -39,15 +43,17 @@ with st.sidebar:
         index=0,
     )
     st.markdown("---")
-    st.caption(f"Source : Parquet {selected_label} ({len(available)} mois disponibles)")
+    n_months = idx_max - idx_min + 1
+    st.caption(f"{n_months} mois sélectionné(s) sur {len(available)} disponibles")
 
 # ── Data ──────────────────────────────────────────────────────────────────
-edges = load_edges(sel_year, sel_month, goldstein_filter)
+edges = load_edges_range(from_ym, to_ym, goldstein_filter)
 
 with open(_CAMEO_JSON, encoding="utf-8") as f:
     country_names: dict[str, str] = json.load(f)
 
-st.markdown(f"**{len(edges)} edge(s)** — {selected_label} — filtre : *{goldstein_filter}*")
+date_range_label = f"{ym_label(*from_ym)} → {ym_label(*to_ym)}"
+st.markdown(f"**{len(edges)} edge(s)** — {date_range_label} — filtre : *{goldstein_filter}*")
 
 # ── Network map component ─────────────────────────────────────────────────
 html_source = _COMPONENT.read_text(encoding="utf-8")

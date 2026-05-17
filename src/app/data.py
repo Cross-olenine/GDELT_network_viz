@@ -12,6 +12,11 @@ GoldsteinFilter = Literal["Tous", "Positif", "Négatif", "Neutre"]
 
 _CATEGORY_MAP = {"Positif": "positif", "Négatif": "negatif", "Neutre": "neutre"}
 
+_FR_MONTHS = [
+    "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+]
+
 
 def list_available_months() -> list[tuple[int, int]]:
     """Return sorted (year, month) tuples for which a Parquet partition exists."""
@@ -23,24 +28,41 @@ def list_available_months() -> list[tuple[int, int]]:
     return months
 
 
-def load_edges(year: int, month: int, goldstein_filter: GoldsteinFilter = "Tous") -> list[dict]:
-    """Aggregate all strict state-to-state GDELT edges from one month of Parquet data.
+def ym_label(year: int, month: int) -> str:
+    """Human-readable month label: 'Janvier 2024'."""
+    return f"{_FR_MONTHS[month]} {year}"
 
-    Reads the Hive partition for the given year/month, keeps only strict
-    state-to-state edges (edge_type='strict'), and aggregates by
-    (actor1_code, actor2_code, goldstein_category) using a log1p(NumMentions)-
-    weighted average of GoldsteinScale.
 
-    Args:
-        year:             Four-digit year.
-        month:            One-based month (1–12).
-        goldstein_filter: One of "Tous", "Positif", "Négatif", "Neutre".
+def load_edges_range(
+    from_ym: tuple[int, int],
+    to_ym: tuple[int, int],
+    goldstein_filter: GoldsteinFilter = "Tous",
+) -> list[dict]:
+    """Aggregate strict state-to-state edges over a range of months.
 
-    Returns:
-        List of dicts with keys: actor1_code, actor2_code,
-        goldstein_category, goldstein_scale, num_mentions.
+    Reads all Hive partitions in [from_ym, to_ym] inclusive via DuckDB
+    hive_partitioning, aggregates by (actor1_code, actor2_code,
+    goldstein_category) using log1p(NumMentions)-weighted GoldsteinScale.
+
+    Returns list of dicts: actor1_code, actor2_code, goldstein_category,
+    goldstein_scale, num_mentions.
     """
-    parquet = _EVENTS_DIR / f"year={year}" / f"month={month:02d}" / "events.parquet"
+    available = list_available_months()
+    selected = [
+        (y, m) for y, m in available
+        if from_ym <= (y, m) <= to_ym
+    ]
+    if not selected:
+        return []
+
+    # Build list of parquet paths covering the requested range
+    paths = [
+        str(_EVENTS_DIR / f"year={y}" / f"month={m:02d}" / "events.parquet")
+        .replace("\\", "/")
+        .replace("'", "''")
+        for y, m in selected
+    ]
+    path_list = ", ".join(f"'{p}'" for p in paths)
 
     cat_clause = ""
     if goldstein_filter != "Tous":
@@ -55,7 +77,7 @@ def load_edges(year: int, month: int, goldstein_filter: GoldsteinFilter = "Tous"
         SUM(LN(1 + NumMentions) * GoldsteinScale)
             / NULLIF(SUM(LN(1 + NumMentions)), 0)  AS goldstein_scale,
         SUM(NumMentions)                             AS num_mentions
-    FROM read_parquet('{str(parquet).replace(chr(92), "/").replace("'", "''")}')
+    FROM read_parquet([{path_list}])
     WHERE
         Actor1CountryCode != Actor2CountryCode
         AND edge_type = 'strict'
