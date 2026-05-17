@@ -18,6 +18,9 @@ data/tmp/
 .vscode/
 .idea/
 
+# Claude Code — config locale (permissions, modèle) propre à chaque dev
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db

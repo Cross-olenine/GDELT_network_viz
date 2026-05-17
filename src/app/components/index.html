@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GDELT Network Map</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #f8f9fa; overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif; }
+
+  #map {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+  }
+
+  .leaflet-overlay-pane svg { pointer-events: none; }
+  .country-group { pointer-events: none; }
+  .drag-handle { pointer-events: all; cursor: grab; }
+  .drag-handle:active { cursor: grabbing; }
+  .edge-line { fill: none; pointer-events: none; }
+  .country-path { stroke: #fff; stroke-width: 0.5; opacity: 0.85; pointer-events: none; }
+
+  /* ── Floating toggle button (panel closed) ───────────────────────────── */
+  #toggle-btn {
+    position: fixed;
+    top: 16px; left: 16px;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.94);
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    font-size: 20px;
+    color: #333;
+    cursor: pointer;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 150ms ease, transform 150ms ease;
+  }
+  #toggle-btn:hover { background: #fff; transform: scale(1.05); }
+
+  /* ── Sliding panel ───────────────────────────────────────────────────── */
+  #panel {
+    position: fixed;
+    top: 0; left: 0;
+    width: 280px; height: 100vh;
+    background: #fff;
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.18);
+    transform: translateX(-100%);
+    transition: transform 300ms ease;
+    z-index: 1500;
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    color: #222;
+  }
+  #panel.open { transform: translateX(0); }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid #eee;
+  }
+  .panel-header h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  #close-btn {
+    background: none;
+    border: none;
+    font-size: 18px;
+    color: #666;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  #close-btn:hover { background: #f3f3f3; color: #222; }
+
+  .panel-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .panel-body h3 {
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase;
+    color: #888; letter-spacing: 0.5px;
+    margin: 6px 0 8px;
+  }
+  .panel-body h3:not(:first-child) { margin-top: 22px; }
+
+  /* ── Dual-handle range slider ────────────────────────────────────────── */
+  .range-slider { position: relative; height: 30px; margin: 6px 0 2px; }
+  .range-slider .track {
+    position: absolute; top: 13px; left: 0; right: 0;
+    height: 4px; background: #e2e8f0; border-radius: 2px;
+  }
+  .range-slider .track-fill {
+    position: absolute; top: 13px;
+    height: 4px; background: #2563eb; border-radius: 2px;
+  }
+  .range-slider input[type="range"] {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 30px;
+    background: transparent;
+    -webkit-appearance: none; appearance: none;
+    pointer-events: none; outline: none;
+  }
+  .range-slider input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; pointer-events: all;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; border: 2px solid #2563eb;
+    cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .range-slider input[type="range"]::-moz-range-thumb {
+    pointer-events: all;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; border: 2px solid #2563eb;
+    cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .range-labels {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: #555; margin-top: 4px;
+  }
+
+  /* ── Radio group ─────────────────────────────────────────────────────── */
+  .radio-group { display: flex; flex-direction: column; gap: 6px; }
+  .radio-group label {
+    display: flex; align-items: center; gap: 8px;
+    cursor: pointer; padding: 4px 0;
+  }
+  .radio-group input[type="radio"] { cursor: pointer; }
+
+  .panel-footer {
+    padding: 14px 20px; border-top: 1px solid #eee;
+    font-size: 12px; color: #444; background: #fafafa;
+  }
+  .panel-footer strong { color: #2563eb; font-weight: 600; }
+
+  #info-panel {
+    position: fixed; top: 16px; right: 16px;
+    background: rgba(255,255,255,0.94);
+    border-radius: 6px; padding: 8px 14px;
+    font-size: 13px; color: #222;
+    z-index: 1000; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    display: none; max-width: 340px;
+  }
+
+  #tooltip {
+    position: absolute;
+    background: #fff; color: #222;
+    font-size: 13px; padding: 6px 10px;
+    border-radius: 4px; pointer-events: none;
+    white-space: nowrap; z-index: 3000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    display: none;
+  }
+
+  #legend {
+    position: fixed; bottom: 24px; right: 16px;
+    background: rgba(255,255,255,0.92);
+    border-radius: 6px; padding: 10px 14px;
+    font-size: 12px; z-index: 1000;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+  #loading {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(255,255,255,0.92);
+    border-radius: 8px; padding: 16px 24px;
+    font-size: 14px; color: #555;
+    z-index: 2000; box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="loading">Chargement des frontières pays…</div>
+<div id="tooltip"></div>
+<div id="info-panel"></div>
+
+<button id="toggle-btn" title="Ouvrir les filtres" aria-label="Ouvrir les filtres">☰</button>
+
+<aside id="panel" role="dialog" aria-label="Filtres">
+  <div class="panel-header">
+    <h2>Filtres</h2>
+    <button id="close-btn" title="Fermer" aria-label="Fermer">✕</button>
+  </div>
+  <div class="panel-body">
+    <h3>Période</h3>
+    <div class="range-slider">
+      <div class="track"></div>
+      <div class="track-fill" id="track-fill"></div>
+      <input type="range" id="from-range" min="0" max="100" value="0" />
+      <input type="range" id="to-range"   min="0" max="100" value="100" />
+    </div>
+    <div class="range-labels">
+      <span id="from-label">—</span>
+      <span id="to-label">—</span>
+    </div>
+
+    <h3>Goldstein category</h3>
+    <div class="radio-group">
+      <label><input type="radio" name="cat" value="Tous" checked> Tous</label>
+      <label><input type="radio" name="cat" value="Positif"> Positif</label>
+      <label><input type="radio" name="cat" value="Négatif"> Négatif</label>
+      <label><input type="radio" name="cat" value="Neutre"> Neutre</label>
+    </div>
+  </div>
+  <div class="panel-footer">
+    <strong id="edge-count">0</strong> edge(s) sélectionnés
+  </div>
+</aside>
+
+<div id="legend">
+  <strong>Goldstein Score</strong>
+  <div class="legend-item"><div class="legend-dot" style="background:#2ecc71"></div> Positif</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Négatif</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#95a5a6"></div> Neutre</div>
+</div>
+
+<script>
+const GEOJSON_URL = "https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson";
+
+// ── Streamlit component protocol ──────────────────────────────────────────
+function sendToStreamlit(type, data) {
+  const out = Object.assign({ isStreamlitMessage: true, type }, data || {});
+  window.parent.postMessage(out, "*");
+}
+function streamlitReady()      { sendToStreamlit("streamlit:componentReady", { apiVersion: 1 }); }
+function streamlitSetHeight(h) { sendToStreamlit("streamlit:setFrameHeight", { height: h }); }
+function streamlitSetValue(v)  { sendToStreamlit("streamlit:setComponentValue", { value: v, dataType: "json" }); }
+
+// ── State ─────────────────────────────────────────────────────────────────
+let edges = [];
+let countryNames = {};
+let activeCountries = new Set();
+let geoFeatures = {};
+let geoCentroids = {};
+let offsets = {};
+let hoveredCountry = null;
+let lockedCountry  = null;
+let dragMoved      = false;
+
+let dateBounds = null;
+let totalDays  = 0;
+let currentFilter = { from_date: null, to_date: null, goldstein_filter: "Tous" };
+let filterInitialised = false;
+
+// ── Highlight logic ───────────────────────────────────────────────────────
+function applyHighlight(code) {
+  const connected = new Set();
+  let pos = 0, neg = 0, neu = 0;
+  for (const e of edges) {
+    const match = e.actor1_code === code || e.actor2_code === code;
+    if (match) {
+      if (e.actor1_code === code) connected.add(e.actor2_code);
+      else connected.add(e.actor1_code);
+      if (e.goldstein_category === "positif") pos++;
+      else if (e.goldstein_category === "negatif") neg++;
+      else neu++;
+    }
+  }
+  edgeG.selectAll("line.edge-line")
+    .attr("stroke-opacity", e => (e.actor1_code === code || e.actor2_code === code) ? 0.8 : 0.03)
+    .attr("stroke-width",   e => (e.actor1_code === code || e.actor2_code === code) ? 2   : 0.5)
+    .attr("stroke", e => {
+      if (e.actor1_code !== code && e.actor2_code !== code) return "#aaa";
+      return e.goldstein_category === "positif" ? "#2ecc71"
+           : e.goldstein_category === "negatif" ? "#e74c3c" : "#95a5a6";
+    });
+  countryG.selectAll("g.country-group").select("path.country-path")
+    .attr("opacity", d => d.code === code ? 1.0 : connected.has(d.code) ? 0.9 : 0.4);
+  const panel = document.getElementById("info-panel");
+  const name = countryNames[code] || code;
+  panel.textContent = `${name} — ${pos+neg+neu} relation(s) | ${pos} positive(s) | ${neg} négative(s) | ${neu} neutre(s)`;
+  panel.style.display = "block";
+}
+function clearHighlight() {
+  edgeG.selectAll("line.edge-line")
+    .attr("stroke-opacity", 0.03)
+    .attr("stroke-width",   0.5)
+    .attr("stroke", "#aaa");
+  countryG.selectAll("g.country-group").select("path.country-path")
+    .attr("opacity", 0.85);
+  document.getElementById("info-panel").style.display = "none";
+}
+
+function countryColor(code) {
+  let h = 0;
+  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) % 360;
+  return `hsl(${h}, 60%, 42%)`;
+}
+
+// ── Leaflet map ───────────────────────────────────────────────────────────
+const map = L.map("map", {
+  zoomControl: true,
+  maxBounds: [[-90, -180], [90, 180]],
+  maxBoundsViscosity: 1.0,
+  minZoom: 2,
+  worldCopyJump: false,
+}).setView([20, 10], 2);
+
+L.tileLayer(
+  "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
+  {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: "abcd",
+    maxZoom: 19,
+    noWrap: true,
+  }
+).addTo(map);
+
+const svgLayer = L.svg().addTo(map);
+const svg = d3.select(map.getPanes().overlayPane).select("svg");
+const rootG = svg.append("g").attr("class", "leaflet-zoom-hide");
+
+const edgeG    = rootG.append("g").attr("class", "edges");
+const countryG = rootG.append("g").attr("class", "countries");
+
+function makeGeoPath() {
+  const transform = d3.geoTransform({
+    point: function(lng, lat) {
+      const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
+      this.stream.point(pt.x, pt.y);
+    }
+  });
+  return d3.geoPath().projection(transform);
+}
+
+function geoCentroid(code) {
+  const c = geoCentroids[code];
+  if (!c) return null;
+  if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) return null;
+  const pt = map.latLngToLayerPoint(L.latLng(c.lat, c.lng));
+  if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return null;
+  return { x: pt.x, y: pt.y };
+}
+function hasValidCentroid(code) { return geoCentroid(code) !== null; }
+function screenCentroid(code) {
+  const g = geoCentroid(code);
+  if (!g) return null;
+  const o = offsets[code] ?? { dx: 0, dy: 0 };
+  return { x: g.x + o.dx, y: g.y + o.dy };
+}
+
+function render() {
+  const path = makeGeoPath();
+
+  const visibleEdges = edges.filter(
+    e => activeCountries.has(e.actor1_code) && activeCountries.has(e.actor2_code)
+      && e.actor1_code !== e.actor2_code
+      && hasValidCentroid(e.actor1_code) && hasValidCentroid(e.actor2_code)
+  );
+
+  const edgeSel = edgeG
+    .selectAll("line.edge-line")
+    .data(visibleEdges, d => `${d.actor1_code}|${d.actor2_code}|${d.goldstein_category}`);
+
+  edgeSel.enter()
+    .append("line")
+    .attr("class", d => `edge-line ${d.goldstein_category}`)
+    .merge(edgeSel)
+    .attr("x1", d => screenCentroid(d.actor1_code)?.x ?? 0)
+    .attr("y1", d => screenCentroid(d.actor1_code)?.y ?? 0)
+    .attr("x2", d => screenCentroid(d.actor2_code)?.x ?? 0)
+    .attr("y2", d => screenCentroid(d.actor2_code)?.y ?? 0)
+    .attr("stroke", "#aaa")
+    .attr("stroke-opacity", 0.03)
+    .attr("stroke-width", 0.5);
+
+  edgeSel.exit().remove();
+
+  const nodeData = [...activeCountries]
+    .filter(code => geoFeatures[code] && hasValidCentroid(code))
+    .map(code => ({ code, feature: geoFeatures[code] }));
+
+  const nodeSel = countryG
+    .selectAll("g.country-group")
+    .data(nodeData, d => d.code);
+
+  const tooltip = document.getElementById("tooltip");
+
+  const nodeEnter = nodeSel.enter()
+    .append("g")
+    .attr("class", "country-group");
+
+  nodeEnter.append("path").attr("class", "country-path");
+  nodeEnter.append("circle").attr("class", "drag-handle")
+    .attr("pointer-events", "all")
+    .call(dragBehavior())
+    .on("mousemove", function(event, d) {
+      tooltip.textContent = countryNames[d.code] || d.code;
+      tooltip.style.display = "block";
+      tooltip.style.left = (event.pageX + 12) + "px";
+      tooltip.style.top  = (event.pageY - 28) + "px";
+      if (!lockedCountry) { hoveredCountry = d.code; applyHighlight(d.code); }
+    })
+    .on("mouseout", function() {
+      tooltip.style.display = "none";
+      hoveredCountry = null;
+      if (!lockedCountry) clearHighlight();
+    })
+    .on("click", function(event, d) {
+      if (dragMoved) return;
+      event.stopPropagation();
+      if (lockedCountry === d.code) {
+        lockedCountry = null;
+        clearHighlight();
+      } else {
+        lockedCountry = d.code;
+        applyHighlight(d.code);
+      }
+    });
+
+  const nodeMerge = nodeEnter.merge(nodeSel);
+
+  nodeMerge
+    .attr("transform", d => {
+      const o = offsets[d.code] ?? { dx: 0, dy: 0 };
+      return `translate(${o.dx},${o.dy})`;
+    });
+
+  nodeMerge.select("path.country-path")
+    .attr("d", d => path(d.feature))
+    .attr("fill", d => countryColor(d.code));
+
+  nodeMerge.select("circle.drag-handle")
+    .attr("cx", d => geoCentroid(d.code)?.x ?? 0)
+    .attr("cy", d => geoCentroid(d.code)?.y ?? 0)
+    .attr("r", d => hasValidCentroid(d.code) ? 40 : 0)
+    .attr("fill", "transparent")
+    .attr("pointer-events", "all");
+
+  nodeSel.exit().remove();
+
+  const active = lockedCountry ?? hoveredCountry;
+  if (active) applyHighlight(active);
+}
+
+function dragBehavior() {
+  let startPx, startPy, startDx, startDy;
+  return d3.drag()
+    .on("start", function(event, d) {
+      dragMoved = false;
+      map.dragging.disable();
+      const [px, py] = d3.pointer(event, rootG.node());
+      startPx = px; startPy = py;
+      const o = offsets[d.code] ?? { dx: 0, dy: 0 };
+      startDx = o.dx; startDy = o.dy;
+    })
+    .on("drag", function(event, d) {
+      const [px, py] = d3.pointer(event, rootG.node());
+      if (Math.hypot(px - startPx, py - startPy) > 4) dragMoved = true;
+      offsets[d.code] = { dx: startDx + (px - startPx), dy: startDy + (py - startPy) };
+      const { dx, dy } = offsets[d.code];
+      d3.select(this.parentNode).attr("transform", `translate(${dx},${dy})`);
+      edgeG.selectAll("line.edge-line")
+        .filter(e => e.actor1_code === d.code || e.actor2_code === d.code)
+        .attr("x1", e => screenCentroid(e.actor1_code)?.x ?? 0)
+        .attr("y1", e => screenCentroid(e.actor1_code)?.y ?? 0)
+        .attr("x2", e => screenCentroid(e.actor2_code)?.x ?? 0)
+        .attr("y2", e => screenCentroid(e.actor2_code)?.y ?? 0);
+    })
+    .on("end", function(event, d) {
+      map.dragging.enable();
+      d3.select(this.parentNode)
+        .transition().duration(400).ease(d3.easeCubicOut)
+        .attr("transform", "translate(0,0)")
+        .on("end", () => { offsets[d.code] = { dx: 0, dy: 0 }; });
+      const geo = geoCentroid(d.code);
+      if (!geo) return;
+      edgeG.selectAll("line.edge-line")
+        .filter(e => e.actor1_code === d.code || e.actor2_code === d.code)
+        .transition().duration(400).ease(d3.easeCubicOut)
+        .attr("x1", e => e.actor1_code === d.code ? geo.x : (screenCentroid(e.actor1_code)?.x ?? 0))
+        .attr("y1", e => e.actor1_code === d.code ? geo.y : (screenCentroid(e.actor1_code)?.y ?? 0))
+        .attr("x2", e => e.actor2_code === d.code ? geo.x : (screenCentroid(e.actor2_code)?.x ?? 0))
+        .attr("y2", e => e.actor2_code === d.code ? geo.y : (screenCentroid(e.actor2_code)?.y ?? 0));
+    });
+}
+
+map.on("click", () => {
+  if (lockedCountry) { lockedCountry = null; clearHighlight(); }
+});
+map.on("moveend zoomend", () => {
+  for (const code of activeCountries) offsets[code] = { dx: 0, dy: 0 };
+  render();
+});
+
+// ── GeoJSON resolution (ISO_A3 → ADM0_A3 fallback) ────────────────────────
+function resolveFeatureCode(feature) {
+  const p = feature.properties || {};
+  const iso3   = p.ISO_A3 ?? p["ISO3166-1-Alpha-3"];
+  const adm0   = p.ADM0_A3;
+  const name   = p.NAME ?? p.ADMIN ?? p.name ?? "(no name)";
+  const usable = (v) => typeof v === "string" && v.length === 3 && v !== "-99";
+  if (usable(iso3)) return { code: iso3, source: "ISO_A3", name };
+  if (usable(adm0)) return { code: adm0, source: "ADM0_A3", name, iso3 };
+  return { code: null, source: null, name, iso3, adm0 };
+}
+
+function logGdeltMatchStats() {
+  if (!Object.keys(geoFeatures).length || !activeCountries.size) return;
+  const matched = [];
+  const missing = [];
+  for (const code of activeCountries) {
+    (geoFeatures[code] ? matched : missing).push(code);
+  }
+  console.log(
+    `[GDELT × GeoJSON] ${matched.length} pays matchés / ${missing.length} sans feature`
+    + (missing.length ? ` — manquants : ${missing.sort().join(", ")}` : "")
+  );
+}
+
+fetch(GEOJSON_URL)
+  .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(geojson => {
+    const fallbackUsed = [];
+    const skipped = [];
+    for (const feature of geojson.features) {
+      const r = resolveFeatureCode(feature);
+      if (!r.code) {
+        skipped.push({ name: r.name, ISO_A3: r.iso3, ADM0_A3: r.adm0 });
+        continue;
+      }
+      if (r.source === "ADM0_A3") {
+        fallbackUsed.push({ name: r.name, ISO_A3: r.iso3 ?? "(missing)", ADM0_A3: r.code });
+      }
+      const [lng, lat] = d3.geoCentroid(feature);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        skipped.push({ name: r.name, ISO_A3: r.iso3 ?? "(missing)", ADM0_A3: r.code, reason: "centroïde NaN" });
+        continue;
+      }
+      geoFeatures[r.code] = feature;
+      geoCentroids[r.code] = { lat, lng };
+    }
+    console.log(
+      `[GeoJSON] ${Object.keys(geoFeatures).length} features chargées`
+      + ` — fallback ADM0_A3 utilisé pour ${fallbackUsed.length} pays`
+      + (skipped.length ? ` — ${skipped.length} features sans code utilisable` : "")
+    );
+    if (fallbackUsed.length) console.table(fallbackUsed);
+    if (skipped.length)      console.table(skipped);
+    document.getElementById("loading").style.display = "none";
+    logGdeltMatchStats();
+    render();
+  })
+  .catch(err => {
+    document.getElementById("loading").textContent = "Erreur chargement GeoJSON : " + err.message;
+  });
+
+// ── Custom sidebar — toggle + click-outside ───────────────────────────────
+const panelEl     = document.getElementById("panel");
+const toggleBtnEl = document.getElementById("toggle-btn");
+const closeBtnEl  = document.getElementById("close-btn");
+function openPanel()  { panelEl.classList.add("open"); toggleBtnEl.style.display = "none"; }
+function closePanel() { panelEl.classList.remove("open"); toggleBtnEl.style.display = "flex"; }
+toggleBtnEl.addEventListener("click", (e) => { e.stopPropagation(); openPanel(); });
+closeBtnEl .addEventListener("click", (e) => { e.stopPropagation(); closePanel(); });
+document.addEventListener("click", (e) => {
+  if (!panelEl.classList.contains("open")) return;
+  if (panelEl.contains(e.target)) return;
+  if (e.target === toggleBtnEl) return;
+  closePanel();
+});
+
+// ── Dual-handle date range slider ─────────────────────────────────────────
+const fromInput  = document.getElementById("from-range");
+const toInput    = document.getElementById("to-range");
+const fromLabel  = document.getElementById("from-label");
+const toLabel    = document.getElementById("to-label");
+const trackFill  = document.getElementById("track-fill");
+const edgeCount  = document.getElementById("edge-count");
+
+function isoToUtcDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+function dayIndexToISO(idx) {
+  const start = isoToUtcDate(dateBounds.min);
+  const d = new Date(start.getTime() + Number(idx) * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+function isoToDayIndex(iso) {
+  const start = isoToUtcDate(dateBounds.min);
+  const d = isoToUtcDate(iso);
+  return Math.round((d - start) / 86400000);
+}
+function formatDateFR(iso) {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function initRangeSlider(bounds, current) {
+  dateBounds = bounds;
+  totalDays = isoToDayIndex(bounds.max);
+  fromInput.min = 0; fromInput.max = totalDays;
+  toInput.min   = 0; toInput.max   = totalDays;
+  fromInput.value = isoToDayIndex(current.from_date);
+  toInput.value   = isoToDayIndex(current.to_date);
+  updateSliderUI();
+}
+
+function updateSliderUI() {
+  if (Number(fromInput.value) > Number(toInput.value)) {
+    fromInput.value = toInput.value;
+  }
+  fromLabel.textContent = formatDateFR(dayIndexToISO(fromInput.value));
+  toLabel.textContent   = formatDateFR(dayIndexToISO(toInput.value));
+  const fromPct = totalDays ? (fromInput.value / totalDays) * 100 : 0;
+  const toPct   = totalDays ? (toInput.value   / totalDays) * 100 : 100;
+  trackFill.style.left  = fromPct + "%";
+  trackFill.style.width = (toPct - fromPct) + "%";
+}
+
+function pushFilterToStreamlit() {
+  if (!filterInitialised) return;
+  const newFilter = {
+    from_date: dayIndexToISO(fromInput.value),
+    to_date:   dayIndexToISO(toInput.value),
+    goldstein_filter: document.querySelector('input[name="cat"]:checked').value,
+  };
+  if (newFilter.from_date === currentFilter.from_date
+      && newFilter.to_date === currentFilter.to_date
+      && newFilter.goldstein_filter === currentFilter.goldstein_filter) {
+    return;
+  }
+  currentFilter = newFilter;
+  streamlitSetValue(newFilter);
+}
+
+fromInput.addEventListener("input", () => {
+  if (Number(fromInput.value) > Number(toInput.value)) fromInput.value = toInput.value;
+  updateSliderUI();
+});
+toInput.addEventListener("input", () => {
+  if (Number(toInput.value) < Number(fromInput.value)) toInput.value = fromInput.value;
+  updateSliderUI();
+});
+fromInput.addEventListener("change", pushFilterToStreamlit);
+toInput.addEventListener("change",   pushFilterToStreamlit);
+document.querySelectorAll('input[name="cat"]').forEach(el => {
+  el.addEventListener("change", pushFilterToStreamlit);
+});
+
+// ── Streamlit render handler ──────────────────────────────────────────────
+window.addEventListener("message", function(event) {
+  const msg = event.data;
+  if (!msg || msg.type !== "streamlit:render") return;
+
+  const args = msg.args || {};
+  edges = args.edges || [];
+  countryNames = args.country_names || {};
+  const bounds = args.bounds;
+  const filterState = args.filter_state || (bounds ? { from_date: bounds.min, to_date: bounds.max, goldstein_filter: "Tous" } : null);
+
+  if (!filterInitialised && bounds && filterState) {
+    initRangeSlider(bounds, filterState);
+    const radio = document.querySelector(`input[name="cat"][value="${filterState.goldstein_filter}"]`);
+    if (radio) radio.checked = true;
+    currentFilter = { ...filterState };
+    filterInitialised = true;
+  }
+
+  const newActive = new Set();
+  for (const e of edges) {
+    if (e.actor1_code) newActive.add(e.actor1_code);
+    if (e.actor2_code) newActive.add(e.actor2_code);
+  }
+  for (const code of newActive) {
+    if (!offsets[code]) offsets[code] = { dx: 0, dy: 0 };
+  }
+  activeCountries = newActive;
+
+  edgeCount.textContent = edges.length.toLocaleString("fr-FR");
+
+  console.log("[GDELT] edges reçus :", edges.length, "— pays actifs :", activeCountries.size);
+  logGdeltMatchStats();
+  render();
+});
+
+streamlitReady();
+streamlitSetHeight(window.innerHeight);
+window.addEventListener("resize", () => streamlitSetHeight(window.innerHeight));
+</script>
+</body>
+</html>
