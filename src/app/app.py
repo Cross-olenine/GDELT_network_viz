@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from data import load_edges_range, list_available_months, ym_label, GoldsteinFilter
+from data import available_date_bounds, load_edges_range, GoldsteinFilter
 
 _ROOT = Path(__file__).parent.parent.parent
 _COMPONENT = Path(__file__).parent / "components" / "network_map.html"
@@ -17,25 +17,24 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Available months ──────────────────────────────────────────────────────
-available = list_available_months()
+# ── Date bounds (cached) ──────────────────────────────────────────────────
+bounds = available_date_bounds()
+if bounds is None:
+    st.warning("Aucune donnée disponible — exécute le pipeline d'ingestion d'abord.")
+    st.stop()
+min_date, max_date = bounds
 
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Filtres")
 
-    if len(available) >= 2:
-        idx_min, idx_max = st.select_slider(
-            "Période",
-            options=list(range(len(available))),
-            value=(0, len(available) - 1),
-            format_func=lambda i: ym_label(*available[i]),
-        )
-    else:
-        idx_min, idx_max = 0, max(0, len(available) - 1)
-
-    from_ym = available[idx_min]
-    to_ym   = available[idx_max]
+    from_date, to_date = st.slider(
+        "Période",
+        min_value=min_date,
+        max_value=max_date,
+        value=(min_date, max_date),
+        format="DD/MM/YYYY",
+    )
 
     goldstein_filter: GoldsteinFilter = st.radio(  # type: ignore[assignment]
         "Goldstein category",
@@ -43,16 +42,17 @@ with st.sidebar:
         index=0,
     )
     st.markdown("---")
-    n_months = idx_max - idx_min + 1
-    st.caption(f"{n_months} mois sélectionné(s) sur {len(available)} disponibles")
+    n_days = (to_date - from_date).days + 1
+    total_days = (max_date - min_date).days + 1
+    st.caption(f"{n_days} jour(s) sélectionné(s) sur {total_days} disponibles")
 
 # ── Data ──────────────────────────────────────────────────────────────────
-edges = load_edges_range(from_ym, to_ym, goldstein_filter)
+edges = load_edges_range(from_date, to_date, goldstein_filter)
 
 with open(_CAMEO_JSON, encoding="utf-8") as f:
     country_names: dict[str, str] = json.load(f)
 
-date_range_label = f"{ym_label(*from_ym)} → {ym_label(*to_ym)}"
+date_range_label = f"{from_date:%d/%m/%Y} → {to_date:%d/%m/%Y}"
 st.markdown(f"**{len(edges)} edge(s)** — {date_range_label} — filtre : *{goldstein_filter}*")
 
 # ── Network map component ─────────────────────────────────────────────────

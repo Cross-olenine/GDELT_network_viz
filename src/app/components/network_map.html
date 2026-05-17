@@ -163,13 +163,21 @@ function countryColor(code) {
 }
 
 // ── Leaflet map ───────────────────────────────────────────────────────────
-const map = L.map("map", { zoomControl: true }).setView([20, 10], 2);
+const map = L.map("map", {
+  zoomControl: true,
+  maxBounds: [[-90, -180], [90, 180]],
+  maxBoundsViscosity: 1.0,
+  minZoom: 2,
+  worldCopyJump: false,
+}).setView([20, 10], 2);
+
 L.tileLayer(
   "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
   {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
     subdomains: "abcd",
     maxZoom: 19,
+    noWrap: true,
   }
 ).addTo(map);
 
@@ -193,16 +201,26 @@ function makeGeoPath() {
 }
 
 // ── Geographic centroid in screen coordinates (no drag offset) ────────────
+// Returns null when the country has no GeoJSON feature or its centroid is
+// missing / not finite — callers MUST handle null to avoid drawing edges
+// to the phantom (0,0) point in layer-coordinate space.
 function geoCentroid(code) {
   const c = geoCentroids[code];
-  if (!c) return { x: 0, y: 0 };
+  if (!c) return null;
+  if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) return null;
   const pt = map.latLngToLayerPoint(L.latLng(c.lat, c.lng));
+  if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return null;
   return { x: pt.x, y: pt.y };
+}
+
+function hasValidCentroid(code) {
+  return geoCentroid(code) !== null;
 }
 
 // ── Screen centroid including drag offset (for edge endpoints) ────────────
 function screenCentroid(code) {
   const g = geoCentroid(code);
+  if (!g) return null;
   const o = offsets[code] ?? { dx: 0, dy: 0 };
   return { x: g.x + o.dx, y: g.y + o.dy };
 }
@@ -212,9 +230,12 @@ function render() {
   const path = makeGeoPath();
 
   // --- Edges ---
+  // Skip any edge where one endpoint lacks a valid centroid — otherwise
+  // it would be drawn to the (0,0) phantom point far west of the map.
   const visibleEdges = edges.filter(
     e => activeCountries.has(e.actor1_code) && activeCountries.has(e.actor2_code)
       && e.actor1_code !== e.actor2_code
+      && hasValidCentroid(e.actor1_code) && hasValidCentroid(e.actor2_code)
   );
 
   const edgeSel = edgeG
@@ -225,10 +246,10 @@ function render() {
     .append("line")
     .attr("class", d => `edge-line ${d.goldstein_category}`)
     .merge(edgeSel)
-    .attr("x1", d => screenCentroid(d.actor1_code).x)
-    .attr("y1", d => screenCentroid(d.actor1_code).y)
-    .attr("x2", d => screenCentroid(d.actor2_code).x)
-    .attr("y2", d => screenCentroid(d.actor2_code).y)
+    .attr("x1", d => screenCentroid(d.actor1_code)?.x ?? 0)
+    .attr("y1", d => screenCentroid(d.actor1_code)?.y ?? 0)
+    .attr("x2", d => screenCentroid(d.actor2_code)?.x ?? 0)
+    .attr("y2", d => screenCentroid(d.actor2_code)?.y ?? 0)
     .attr("stroke", "#aaa")
     .attr("stroke-opacity", 0.03)
     .attr("stroke-width", 0.5);
@@ -237,7 +258,7 @@ function render() {
 
   // --- Country silhouettes ---
   const nodeData = [...activeCountries]
-    .filter(code => geoFeatures[code] && geoCentroids[code])
+    .filter(code => geoFeatures[code] && hasValidCentroid(code))
     .map(code => ({ code, feature: geoFeatures[code] }));
 
   const nodeSel = countryG
@@ -293,9 +314,9 @@ function render() {
     .attr("fill", d => countryColor(d.code));
 
   nodeMerge.select("circle.drag-handle")
-    .attr("cx", d => geoCentroid(d.code).x)
-    .attr("cy", d => geoCentroid(d.code).y)
-    .attr("r", 40)
+    .attr("cx", d => geoCentroid(d.code)?.x ?? 0)
+    .attr("cy", d => geoCentroid(d.code)?.y ?? 0)
+    .attr("r", d => hasValidCentroid(d.code) ? 40 : 0)
     .attr("fill", "transparent")
     .attr("pointer-events", "all");
 
@@ -332,10 +353,10 @@ function dragBehavior() {
       d3.select(this.parentNode).attr("transform", `translate(${dx},${dy})`);
       edgeG.selectAll("line.edge-line")
         .filter(e => e.actor1_code === d.code || e.actor2_code === d.code)
-        .attr("x1", e => screenCentroid(e.actor1_code).x)
-        .attr("y1", e => screenCentroid(e.actor1_code).y)
-        .attr("x2", e => screenCentroid(e.actor2_code).x)
-        .attr("y2", e => screenCentroid(e.actor2_code).y);
+        .attr("x1", e => screenCentroid(e.actor1_code)?.x ?? 0)
+        .attr("y1", e => screenCentroid(e.actor1_code)?.y ?? 0)
+        .attr("x2", e => screenCentroid(e.actor2_code)?.x ?? 0)
+        .attr("y2", e => screenCentroid(e.actor2_code)?.y ?? 0);
     })
     .on("end", function(event, d) {
       map.dragging.enable();
@@ -344,13 +365,14 @@ function dragBehavior() {
         .attr("transform", "translate(0,0)")
         .on("end", () => { offsets[d.code] = { dx: 0, dy: 0 }; });
       const geo = geoCentroid(d.code);
+      if (!geo) return;
       edgeG.selectAll("line.edge-line")
         .filter(e => e.actor1_code === d.code || e.actor2_code === d.code)
         .transition().duration(400).ease(d3.easeCubicOut)
-        .attr("x1", e => e.actor1_code === d.code ? geo.x : screenCentroid(e.actor1_code).x)
-        .attr("y1", e => e.actor1_code === d.code ? geo.y : screenCentroid(e.actor1_code).y)
-        .attr("x2", e => e.actor2_code === d.code ? geo.x : screenCentroid(e.actor2_code).x)
-        .attr("y2", e => e.actor2_code === d.code ? geo.y : screenCentroid(e.actor2_code).y);
+        .attr("x1", e => e.actor1_code === d.code ? geo.x : (screenCentroid(e.actor1_code)?.x ?? 0))
+        .attr("y1", e => e.actor1_code === d.code ? geo.y : (screenCentroid(e.actor1_code)?.y ?? 0))
+        .attr("x2", e => e.actor2_code === d.code ? geo.x : (screenCentroid(e.actor2_code)?.x ?? 0))
+        .attr("y2", e => e.actor2_code === d.code ? geo.y : (screenCentroid(e.actor2_code)?.y ?? 0));
     });
 }
 
@@ -365,6 +387,35 @@ map.on("moveend zoomend", () => {
   render();
 });
 
+// ── Resolve a feature's country code (ISO_A3 first, ADM0_A3 fallback) ─────
+// Natural Earth marks unrecognised states with ISO_A3 == "-99"; ADM0_A3
+// always carries a real 3-letter code. We also accept ISO3166-1-Alpha-3
+// for GeoJSON variants that use that naming.
+function resolveFeatureCode(feature) {
+  const p = feature.properties || {};
+  const iso3   = p.ISO_A3 ?? p["ISO3166-1-Alpha-3"];
+  const adm0   = p.ADM0_A3;
+  const name   = p.NAME ?? p.ADMIN ?? p.name ?? "(no name)";
+  const usable = (v) => typeof v === "string" && v.length === 3 && v !== "-99";
+  if (usable(iso3)) return { code: iso3, source: "ISO_A3", name };
+  if (usable(adm0)) return { code: adm0, source: "ADM0_A3", name, iso3 };
+  return { code: null, source: null, name, iso3, adm0 };
+}
+
+// Diagnostic — list GDELT codes with / without a matching GeoJSON feature
+function logGdeltMatchStats() {
+  if (!Object.keys(geoFeatures).length || !activeCountries.size) return;
+  const matched = [];
+  const missing = [];
+  for (const code of activeCountries) {
+    (geoFeatures[code] ? matched : missing).push(code);
+  }
+  console.log(
+    `[GDELT × GeoJSON] ${matched.length} pays matchés / ${missing.length} sans feature`
+    + (missing.length ? ` — manquants : ${missing.sort().join(", ")}` : "")
+  );
+}
+
 // ── Load GeoJSON boundaries (all countries) ───────────────────────────────
 fetch(GEOJSON_URL)
   .then(r => {
@@ -372,14 +423,35 @@ fetch(GEOJSON_URL)
     return r.json();
   })
   .then(geojson => {
+    const fallbackUsed = [];
+    const skipped = [];
     for (const feature of geojson.features) {
-      const code = feature.properties["ISO3166-1-Alpha-3"];
-      if (!code) continue;
-      geoFeatures[code] = feature;
+      const r = resolveFeatureCode(feature);
+      if (!r.code) {
+        skipped.push({ name: r.name, ISO_A3: r.iso3, ADM0_A3: r.adm0 });
+        continue;
+      }
+      if (r.source === "ADM0_A3") {
+        fallbackUsed.push({ name: r.name, ISO_A3: r.iso3 ?? "(missing)", ADM0_A3: r.code });
+      }
       const [lng, lat] = d3.geoCentroid(feature);
-      geoCentroids[code] = { lat, lng };
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        skipped.push({ name: r.name, ISO_A3: r.iso3 ?? "(missing)", ADM0_A3: r.code, reason: "centroïde NaN" });
+        continue;
+      }
+      geoFeatures[r.code] = feature;
+      geoCentroids[r.code] = { lat, lng };
     }
+    console.log(
+      `[GeoJSON] ${Object.keys(geoFeatures).length} features chargées`
+      + ` — fallback ADM0_A3 utilisé pour ${fallbackUsed.length} pays`
+      + (skipped.length ? ` — ${skipped.length} features sans code utilisable` : "")
+    );
+    if (fallbackUsed.length) console.table(fallbackUsed);
+    if (skipped.length)      console.table(skipped);
+
     document.getElementById("loading").style.display = "none";
+    logGdeltMatchStats();
     render();
   })
   .catch(err => {
@@ -407,6 +479,7 @@ window.addEventListener("message", function(event) {
   activeCountries = newActive;
 
   console.log("[GDELT] edges reçus :", edges.length, "— pays actifs :", activeCountries.size);
+  logGdeltMatchStats();
   render();
 });
 

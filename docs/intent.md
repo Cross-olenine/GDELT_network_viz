@@ -27,8 +27,9 @@ les relations entre deux pays constituent les edges du réseau.
 - Les edges représentent la relation positive/négative entre deux pays
 - Métrique principale : GoldsteinScale (100% rempli, borné -10/+10, stable)
   AvgTone en complémentaire (r=0,31 avec GoldsteinScale — apport contextuel NLP)
-- Granularité temporelle MVP : un mois (avril 2026) — slicer temporel prévu
-  comme feature ultérieure
+- Granularité temporelle : **au jour près**, plage librement choisie par
+  l'utilisateur via un range slider de dates couvrant l'historique
+  disponible (cf. section "Évolution — filtre temporel au jour" ci-dessous)
 - Agrégation : 4 scores par paire de pays, moyenne pondérée GoldsteinScale
   par log1p(NumMentions) : score_positif (GS>0), score_negatif (GS<0),
   score_neutre (GS=0), score_global (tous les événements)
@@ -40,6 +41,35 @@ les relations entre deux pays constituent les edges du réseau.
   non vides, tous deux correspondant à des États (codes CAMEO 3 lettres
   ISO-compatibles, hors codes régionaux custom). Les événements état→organisation
   sont taggés avec un type d'edge distinct pour permettre un filtrage UI.
+
+## Évolution — filtre temporel au jour (2026-05-17)
+
+### Besoin
+Remplacer le slicer mensuel (1 cran = 1 fichier Parquet) par un range
+slider de dates au jour près couvrant tout l'historique ingéré.
+
+### Problèmes à résoudre
+- **Décorrélation Parquet ↔ SQLDATE** : un fichier `year=Y/month=M` peut
+  contenir des événements dont le `SQLDATE` est antérieur (rajouts tardifs
+  côté GDELT). Le filtrage doit donc se faire sur la colonne `SQLDATE`,
+  pas sur l'arborescence Parquet — il faut accepter de scanner tous les
+  fichiers et filtrer par valeur.
+- **Fluidité du slider** : recalculer la moyenne pondérée
+  `Σ log1p(NumMentions)·GoldsteinScale / Σ log1p(NumMentions)` sur
+  plusieurs millions de lignes à chaque déplacement du slider serait
+  trop lent. Il faut une stratégie d'agrégation et de cache.
+- **Équivalence numérique** : la nouvelle stratégie doit produire des
+  scores strictement identiques à l'agrégation SQL d'origine (la moyenne
+  pondérée est compositionnelle — sommer les poids et les
+  numérateurs par sous-période préserve l'exactitude).
+
+### Solution retenue
+Pré-agrégation au grain **(jour × actor1 × actor2 × goldstein_category)**
+exécutée une seule fois par session (`@st.cache_data`) sur l'ensemble
+des Parquet ; chaque mouvement du slider devient une opération `pandas`
+en mémoire (filtre + groupby) sur cette table cachée. Les bornes
+min/max du slider sont dérivées dynamiquement du min/max de `SQLDATE`
+dans la table cachée.
 
 ## Décisions bloquées — nécessitent une exploration dédiée
 
