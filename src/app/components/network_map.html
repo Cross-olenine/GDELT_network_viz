@@ -19,10 +19,23 @@
   .drag-handle { pointer-events: all; cursor: grab; }
   .drag-handle:active { cursor: grabbing; }
 
-  .edge-line { stroke-opacity: 0.7; fill: none; pointer-events: none; }
-  .edge-line.positif { stroke: #2ecc71; }
-  .edge-line.negatif { stroke: #e74c3c; }
-  .edge-line.neutre  { stroke: #95a5a6; }
+  .edge-line { fill: none; pointer-events: none; }
+
+  #info-panel {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(255,255,255,0.94);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+    color: #222;
+    z-index: 1000;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    display: none;
+    max-width: 340px;
+  }
 
   .country-path { stroke: #fff; stroke-width: 0.5; opacity: 0.85; pointer-events: none; }
 
@@ -77,6 +90,8 @@
 <div id="loading">Chargement des frontières pays…</div>
 <div id="tooltip"></div>
 
+<div id="info-panel"></div>
+
 <div id="legend">
   <strong>Goldstein Score</strong>
   <div class="legend-item"><div class="legend-dot" style="background:#2ecc71"></div> Positif</div>
@@ -94,6 +109,50 @@ let activeCountries = new Set();   // codes present in current edges
 let geoFeatures = {};              // iso3 → GeoJSON Feature (all countries)
 let geoCentroids = {};             // iso3 → { lat, lng } from d3.geoCentroid
 let offsets = {};                  // iso3 → { dx, dy } in screen pixels
+let hoveredCountry = null;
+let lockedCountry  = null;
+let dragMoved      = false;
+
+// ── Highlight one country's edges; dim everything else ────────────────────
+function applyHighlight(code) {
+  const connected = new Set();
+  let pos = 0, neg = 0, neu = 0;
+  for (const e of edges) {
+    const match = e.actor1_code === code || e.actor2_code === code;
+    if (match) {
+      if (e.actor1_code === code) connected.add(e.actor2_code);
+      else connected.add(e.actor1_code);
+      if (e.goldstein_category === "positif") pos++;
+      else if (e.goldstein_category === "negatif") neg++;
+      else neu++;
+    }
+  }
+  edgeG.selectAll("line.edge-line")
+    .attr("stroke-opacity", e => (e.actor1_code === code || e.actor2_code === code) ? 0.8 : 0.03)
+    .attr("stroke-width",   e => (e.actor1_code === code || e.actor2_code === code) ? 2   : 0.5)
+    .attr("stroke", e => {
+      if (e.actor1_code !== code && e.actor2_code !== code) return "#aaa";
+      return e.goldstein_category === "positif" ? "#2ecc71"
+           : e.goldstein_category === "negatif" ? "#e74c3c" : "#95a5a6";
+    });
+  countryG.selectAll("g.country-group").select("path.country-path")
+    .attr("opacity", d => d.code === code ? 1.0 : connected.has(d.code) ? 0.9 : 0.4);
+  const panel = document.getElementById("info-panel");
+  const name = countryNames[code] || code;
+  panel.textContent = `${name} — ${pos+neg+neu} relation(s) | ${pos} positive(s) | ${neg} négative(s) | ${neu} neutre(s)`;
+  panel.style.display = "block";
+}
+
+// ── Reset to default appearance ───────────────────────────────────────────
+function clearHighlight() {
+  edgeG.selectAll("line.edge-line")
+    .attr("stroke-opacity", 0.03)
+    .attr("stroke-width",   0.5)
+    .attr("stroke", "#aaa");
+  countryG.selectAll("g.country-group").select("path.country-path")
+    .attr("opacity", 0.85);
+  document.getElementById("info-panel").style.display = "none";
+}
 
 // ── Deterministic color from 3-letter ISO code ────────────────────────────
 function countryColor(code) {
@@ -169,7 +228,9 @@ function render() {
     .attr("y1", d => screenCentroid(d.actor1_code).y)
     .attr("x2", d => screenCentroid(d.actor2_code).x)
     .attr("y2", d => screenCentroid(d.actor2_code).y)
-    .attr("stroke-width", d => Math.max(2, Math.log1p(d.num_mentions || 1)));
+    .attr("stroke", "#aaa")
+    .attr("stroke-opacity", 0.03)
+    .attr("stroke-width", 0.5);
 
   edgeSel.exit().remove();
 
@@ -197,9 +258,23 @@ function render() {
       tooltip.style.display = "block";
       tooltip.style.left = (event.clientX + 14) + "px";
       tooltip.style.top  = (event.clientY - 28) + "px";
+      if (!lockedCountry) { hoveredCountry = d.code; applyHighlight(d.code); }
     })
     .on("mouseout", function() {
       tooltip.style.display = "none";
+      hoveredCountry = null;
+      if (!lockedCountry) clearHighlight();
+    })
+    .on("click", function(event, d) {
+      if (dragMoved) return;
+      event.stopPropagation();
+      if (lockedCountry === d.code) {
+        lockedCountry = null;
+        clearHighlight();
+      } else {
+        lockedCountry = d.code;
+        applyHighlight(d.code);
+      }
     });
 
   const nodeMerge = nodeEnter.merge(nodeSel);
@@ -222,6 +297,10 @@ function render() {
     .attr("fill", "transparent");
 
   nodeSel.exit().remove();
+
+  // Re-apply highlight state after DOM rebuild
+  const active = lockedCountry ?? hoveredCountry;
+  if (active) applyHighlight(active);
 }
 
 // ── Drag behaviour (snap-back on release) ─────────────────────────────────
@@ -230,6 +309,7 @@ function dragBehavior() {
 
   return d3.drag()
     .on("start", function(event, d) {
+      dragMoved = false;
       map.dragging.disable();
       const [px, py] = d3.pointer(event, rootG.node());
       startPx = px;
@@ -240,6 +320,7 @@ function dragBehavior() {
     })
     .on("drag", function(event, d) {
       const [px, py] = d3.pointer(event, rootG.node());
+      if (Math.hypot(px - startPx, py - startPy) > 4) dragMoved = true;
       offsets[d.code] = {
         dx: startDx + (px - startPx),
         dy: startDy + (py - startPy),
@@ -269,6 +350,11 @@ function dragBehavior() {
         .attr("y2", e => e.actor2_code === d.code ? geo.y : screenCentroid(e.actor2_code).y);
     });
 }
+
+// ── Click background → clear lock ─────────────────────────────────────────
+map.on("click", () => {
+  if (lockedCountry) { lockedCountry = null; clearHighlight(); }
+});
 
 // ── Re-project when map moves / zooms ─────────────────────────────────────
 map.on("moveend zoomend", () => {
