@@ -13,9 +13,23 @@ les relations entre deux pays constituent les edges du réseau.
 [ ] Deep Learning
 
 ## Architecture applicative
-- Ingestion CSV GDELT bulk → DuckDB
-- Transformations DuckDB natif (SQL)
-- Restitution Streamlit
+- **Ingestion** : `asyncio` + `httpx` + Polars (téléchargement
+  GDELT daily ZIP, parsing all-string, transformation, écriture
+  Parquet Hive-partitionné `year=YYYY/month=MM`)
+- **Stockage** : Parquet zstd, un fichier par mois
+- **Couche query** : DuckDB lit les Parquet (`read_parquet([...])`),
+  pré-agrège tous les événements au grain jour, le résultat est mis
+  en cache par session via `@st.cache_data` ; chaque mouvement de
+  filtre est ensuite un `pandas` `groupby` en mémoire sur la table
+  cachée
+- **Restitution** : Streamlit comme shell minimal (chrome masqué par
+  CSS) + composant custom (`components.declare_component`) — iframe
+  HTML/JS contenant Leaflet (tuiles + interactions carte) et D3
+  (rendu SVG du réseau et des silhouettes pays). Toute l'UI de filtres
+  vit dans le composant (sidebar slide-in custom) ; les changements
+  sont poussés à Streamlit via le protocole `streamlit:setComponentValue`,
+  qui déclenche un rerun Python recalculant les edges et les renvoyant
+  au composant
 
 ## Décisions prises
 - Source : fichiers CSV GDELT bulk (pas d'API temps réel — trop instable)
@@ -71,10 +85,89 @@ en mémoire (filtre + groupby) sur cette table cachée. Les bornes
 min/max du slider sont dérivées dynamiquement du min/max de `SQLDATE`
 dans la table cachée.
 
+## Évolution — composant Streamlit custom plein écran (2026-05-17)
+
+### Besoin
+Maximiser la surface visible de la carte (le réseau est l'objet
+principal) et regrouper tous les filtres dans une UI compacte et
+discrète, ouverte à la demande.
+
+### Problèmes à résoudre
+- **Sidebar Streamlit native** : occupe ~300 px de viewport en
+  permanence et impose un look "dashboard" inadapté à une viz
+  immersive.
+- **Chrome Streamlit** : header, footer, toolbar et padding du
+  block-container réduisent encore la surface utile.
+- **Communication bidirectionnelle iframe ↔ Streamlit** : avec
+  `components.v1.html` (injection HTML brute, stateless), le
+  composant peut recevoir des données via `postMessage` mais ne peut
+  pas en renvoyer vers Streamlit pour déclencher un rerun côté
+  Python — donc impossible de gérer l'UI de filtres depuis l'iframe.
+
+### Solution retenue
+- Migration de `components.v1.html` vers `components.declare_component`
+  qui implémente le protocole Streamlit
+  (`streamlit:componentReady`, `streamlit:render`,
+  `streamlit:setComponentValue`, `streamlit:setFrameHeight`).
+  L'iframe peut désormais pousser des valeurs vers Streamlit.
+- CSS injecté côté Python : `display: none` sur la sidebar, le header,
+  le footer, la toolbar et la décoration Streamlit ; `iframe`
+  forcée à `100vw × 100vh`.
+- Sidebar custom intégrée au composant : bouton flottant rond 40×40
+  qui ouvre un panneau 280×100vh animé (`transform 300ms ease`),
+  contenant le range slider de dates, les radios catégorie et un
+  compteur d'edges. Clic extérieur ferme le panneau.
+- L'état de filtre vit côté Python dans `st.session_state` ; chaque
+  modification depuis la sidebar custom déclenche un rerun, recompute
+  les edges, et les renvoie au composant.
+
+## Évolution — cartographie codes pays GeoJSON (2026-05-17)
+
+### Besoin
+Afficher correctement tous les pays présents dans les données GDELT,
+sans en exclure silencieusement à cause de divergences de codification
+dans le GeoJSON de référence.
+
+### Problèmes à résoudre
+- **Bug Natural Earth `ISO_A3 == "-99"`** : certains États (statuts
+  contestés, divergences ISO/SO) portent la valeur sentinelle `"-99"`
+  comme code ISO_A3. Lire `ISO_A3` sans fallback exclut ces pays du
+  rendu — ils sont absents de la carte alors qu'ils sont présents
+  dans les données GDELT.
+- **Edges fantômes** : lorsqu'un code GDELT n'a pas de feature
+  GeoJSON, le centroïde retourné par défaut était `(0, 0)` en
+  coordonnées Leaflet — l'edge correspondant traçait une ligne
+  fantôme vers le nord-ouest de la carte.
+
+### Solution retenue
+- **Résolveur dynamique** au chargement du GeoJSON : pour chaque
+  feature, tentative `ISO_A3` puis fallback `ADM0_A3` (toujours
+  présent, toujours code à 3 lettres). Aucune liste hardcodée — la
+  table de correspondance est entièrement construite depuis le
+  GeoJSON, donc fonctionne avec n'importe quelle version Natural
+  Earth.
+- **Centroïde invalide → null explicite** : `geoCentroid(code)` ne
+  retourne plus jamais `(0, 0)` en fallback silencieux. Filtre amont
+  des edges : on ne trace que si les deux extrémités ont un centroïde
+  valide (présent + lat/lng/pixels finis).
+- **Diagnostic console** : logs `[GeoJSON]` (features chargées,
+  fallbacks ADM0_A3, features ignorées avec raison) et
+  `[GDELT × GeoJSON]` (pays matchés vs sans feature) émis à chaque
+  chargement et chaque changement de filtre.
+
+## Décisions précédemment bloquées — résolues
+
+- **Comment représenter techniquement le réseau superposé à la carte ?**
+  Résolu (2026-05-17) : Leaflet (carte raster + interactions zoom/pan)
+  + D3 (rendu SVG du réseau et des silhouettes pays) à l'intérieur
+  d'un composant Streamlit custom (`declare_component`). Aucun
+  package Python de network viz côté serveur — tout le rendu est
+  HTML/JS dans une iframe, Python ne fournit que les edges agrégés
+  et les centroïdes via le protocole composant Streamlit.
+
 ## Décisions bloquées — nécessitent une exploration dédiée
 
-- Comment représenter techniquement le réseau superposé à la carte ?
-  (package Python à choisir après phase d'exploration visualisation)
+(Aucune actuellement.)
 
 ## Questions prioritaires à résoudre en Phase 1
 1. Quels champs GDELT encodent les deux pays d'un événement ?
