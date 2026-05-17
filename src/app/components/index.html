@@ -268,6 +268,29 @@ let totalDays  = 0;
 let currentFilter = { from_date: null, to_date: null, goldstein_filter: "Tous" };
 let filterInitialised = false;
 
+// ── Edge thickness normalisation ──────────────────────────────────────────
+// Linéaire sur le count (nb d'événements) entre 0.3px (min observé) et
+// 6px (max observé). Recalculée à chaque réception d'edges.
+let minCount = 0;
+let maxCount = 0;
+function recomputeCountBounds() {
+  if (!edges.length) { minCount = 0; maxCount = 0; return; }
+  let lo = Infinity, hi = -Infinity;
+  for (const e of edges) {
+    const c = Number(e.count) || 0;
+    if (c < lo) lo = c;
+    if (c > hi) hi = c;
+  }
+  minCount = Number.isFinite(lo) ? lo : 0;
+  maxCount = Number.isFinite(hi) ? hi : 0;
+}
+function strokeWidthFor(edge) {
+  const c = Number(edge.count) || 0;
+  if (maxCount <= minCount) return 0.3;
+  const t = (c - minCount) / (maxCount - minCount);
+  return 0.3 + t * 5.7;
+}
+
 // ── Highlight logic ───────────────────────────────────────────────────────
 function applyHighlight(code) {
   const connected = new Set();
@@ -284,7 +307,7 @@ function applyHighlight(code) {
   }
   edgeG.selectAll("line.edge-line")
     .attr("stroke-opacity", e => (e.actor1_code === code || e.actor2_code === code) ? 0.8 : 0.03)
-    .attr("stroke-width",   e => (e.actor1_code === code || e.actor2_code === code) ? 2   : 0.5)
+    .attr("stroke-width",   e => strokeWidthFor(e))
     .attr("stroke", e => {
       if (e.actor1_code !== code && e.actor2_code !== code) return "#aaa";
       return e.goldstein_category === "positif" ? "#2ecc71"
@@ -300,7 +323,7 @@ function applyHighlight(code) {
 function clearHighlight() {
   edgeG.selectAll("line.edge-line")
     .attr("stroke-opacity", 0.03)
-    .attr("stroke-width",   0.5)
+    .attr("stroke-width",   e => strokeWidthFor(e))
     .attr("stroke", "#aaa");
   countryG.selectAll("g.country-group").select("path.country-path")
     .attr("opacity", 0.85);
@@ -320,8 +343,9 @@ const map = L.map("map", {
   maxBoundsViscosity: 1.0,
   minZoom: 2,
   maxZoom: 8,
+  zoomSnap: 0.5,
   worldCopyJump: false,
-}).setView([20, 15], 3);
+}).setView([20, 15], 3.5);
 
 L.tileLayer(
   "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
@@ -389,7 +413,7 @@ function render() {
     .attr("y2", d => screenCentroid(d.actor2_code)?.y ?? 0)
     .attr("stroke", "#aaa")
     .attr("stroke-opacity", 0.03)
-    .attr("stroke-width", 0.5);
+    .attr("stroke-width", e => strokeWidthFor(e));
 
   edgeSel.exit().remove();
 
@@ -676,6 +700,7 @@ window.addEventListener("message", function(event) {
   const args = msg.args || {};
   edges = args.edges || [];
   countryNames = args.country_names || {};
+  recomputeCountBounds();
   const bounds = args.bounds;
   const filterState = args.filter_state || (bounds ? { from_date: bounds.min, to_date: bounds.max, goldstein_filter: "Tous" } : null);
 
