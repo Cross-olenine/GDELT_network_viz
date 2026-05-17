@@ -26,34 +26,43 @@
   .edge-line { fill: none; pointer-events: none; }
   .country-path { stroke: #fff; stroke-width: 0.5; opacity: 0.85; pointer-events: none; }
 
-  /* ── Floating toggle button (panel closed) ───────────────────────────── */
-  #toggle-btn {
+  /* ── Vertical left toolbar ───────────────────────────────────────────── */
+  #toolbar {
     position: fixed;
-    top: 16px; left: 16px;
-    width: 40px; height: 40px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.94);
+    top: 0; left: 0;
+    width: 48px; height: 100vh;
+    background: #fff;
+    box-shadow: 2px 0 6px rgba(0, 0, 0, 0.12);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+  }
+  .toolbar-btn {
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    background: transparent;
     border: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-    font-size: 20px;
+    font-size: 18px;
     color: #333;
     cursor: pointer;
-    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 150ms ease, transform 150ms ease;
+    transition: background 150ms ease;
   }
-  #toggle-btn:hover { background: #fff; transform: scale(1.05); }
+  .toolbar-btn:hover { background: #f0f0f0; }
 
   /* ── Sliding panel ───────────────────────────────────────────────────── */
   #panel {
     position: fixed;
-    top: 0; left: 0;
+    top: 0; left: 48px;
     width: 280px; height: 100vh;
     background: #fff;
     box-shadow: 2px 0 10px rgba(0, 0, 0, 0.18);
-    transform: translateX(-100%);
+    transform: translateX(calc(-100% - 48px));
     transition: transform 300ms ease;
     z-index: 1500;
     display: flex;
@@ -62,6 +71,10 @@
     color: #222;
   }
   #panel.open { transform: translateX(0); }
+
+  /* ── Leaflet zoom control repositioned ───────────────────────────────── */
+  .leaflet-top.leaflet-left { left: auto; right: 16px; top: 16px; }
+  .leaflet-top.leaflet-left .leaflet-control { margin: 0; }
 
   .panel-header {
     display: flex;
@@ -185,7 +198,9 @@
 <div id="tooltip"></div>
 <div id="info-panel"></div>
 
-<button id="toggle-btn" title="Ouvrir les filtres" aria-label="Ouvrir les filtres">☰</button>
+<nav id="toolbar" role="toolbar" aria-label="Barre d'outils">
+  <button id="toggle-btn" class="toolbar-btn" title="Filtres" aria-label="Filtres">☰</button>
+</nav>
 
 <aside id="panel" role="dialog" aria-label="Filtres">
   <div class="panel-header">
@@ -304,8 +319,9 @@ const map = L.map("map", {
   maxBounds: [[-90, -180], [90, 180]],
   maxBoundsViscosity: 1.0,
   minZoom: 2,
+  maxZoom: 8,
   worldCopyJump: false,
-}).setView([20, 10], 2);
+}).setView([20, 15], 3);
 
 L.tileLayer(
   "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
@@ -558,16 +574,18 @@ fetch(GEOJSON_URL)
 
 // ── Custom sidebar — toggle + click-outside ───────────────────────────────
 const panelEl     = document.getElementById("panel");
+const toolbarEl   = document.getElementById("toolbar");
 const toggleBtnEl = document.getElementById("toggle-btn");
 const closeBtnEl  = document.getElementById("close-btn");
-function openPanel()  { panelEl.classList.add("open"); toggleBtnEl.style.display = "none"; }
-function closePanel() { panelEl.classList.remove("open"); toggleBtnEl.style.display = "flex"; }
-toggleBtnEl.addEventListener("click", (e) => { e.stopPropagation(); openPanel(); });
+function openPanel()  { panelEl.classList.add("open"); }
+function closePanel() { panelEl.classList.remove("open"); }
+function togglePanel(){ panelEl.classList.toggle("open"); }
+toggleBtnEl.addEventListener("click", (e) => { e.stopPropagation(); togglePanel(); });
 closeBtnEl .addEventListener("click", (e) => { e.stopPropagation(); closePanel(); });
 document.addEventListener("click", (e) => {
   if (!panelEl.classList.contains("open")) return;
   if (panelEl.contains(e.target)) return;
-  if (e.target === toggleBtnEl) return;
+  if (toolbarEl.contains(e.target)) return;
   closePanel();
 });
 

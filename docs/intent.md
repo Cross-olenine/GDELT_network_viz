@@ -155,6 +155,31 @@ dans le GeoJSON de référence.
   `[GDELT × GeoJSON]` (pays matchés vs sans feature) émis à chaque
   chargement et chaque changement de filtre.
 
+## UI/UX — Décisions prises (2026-05-17)
+
+- **Carte plein écran** : la sidebar Streamlit native est supprimée
+  (CSS `display: none` côté Python). Le composant iframe occupe la
+  totalité du viewport (`100vw × 100vh`).
+- **Barre d'outils verticale fixe à gauche** : `position: fixed`,
+  `left: 0`, `top: 0`, `height: 100vh`, `width: 48px`, fond blanc,
+  légère ombre portée vers la droite (`box-shadow: 2px 0 6px`).
+  Liste verticale de boutons (`flex-direction: column`, `gap: 8px`,
+  `padding: 8px`).
+- **Boutons de la barre** :
+  - Filtres (☰) — implémenté, ouvre le panneau de filtres
+  - Glossaire — prévu (slot réservé sous le bouton Filtres)
+  - Chaque bouton : 36×36 px, fond transparent, `border-radius: 6px`,
+    hover `#f0f0f0`, tooltip natif `title="…"`.
+- **Panneau filtres** : slide depuis `left: 48px` (largeur 280 px,
+  hauteur 100vh) pour ne pas recouvrir la barre d'outils. Clic
+  extérieur (hors panneau et hors barre d'outils) ferme le panneau.
+- **Zoom Leaflet initial** : `setView([20, 15], 3)` — centre sur le
+  monde habité, zoom 3 pour éliminer les bandes grises haut/bas du
+  viewport initial. `minZoom: 2`, `maxZoom: 8`.
+- **Contrôles zoom Leaflet repositionnés** : déplacés en haut à
+  droite (`top: 16px`, `right: 16px`) pour libérer la zone gauche
+  occupée par la barre d'outils.
+
 ## Décisions précédemment bloquées — résolues
 
 - **Comment représenter techniquement le réseau superposé à la carte ?**
