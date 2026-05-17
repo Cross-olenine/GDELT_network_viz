@@ -17,7 +17,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from data import available_date_bounds, load_edges_range
+from data import available_date_bounds, get_country_relations, load_edges_range
 
 _ROOT = Path(__file__).parent.parent.parent
 _COMPONENTS_DIR = Path(__file__).parent / "components"
@@ -65,10 +65,15 @@ DEFAULT_FILTER = {
     "from_date": min_date.isoformat(),
     "to_date":   max_date.isoformat(),
     "goldstein_filter": "Tous",
+    "selected_country": None,
 }
 
 if "filter_state" not in st.session_state:
     st.session_state.filter_state = DEFAULT_FILTER.copy()
+else:
+    # Backfill new keys on a stale session
+    for k, v in DEFAULT_FILTER.items():
+        st.session_state.filter_state.setdefault(k, v)
 
 fs = st.session_state.filter_state
 
@@ -82,19 +87,32 @@ edges = load_edges_range(
 with open(_CAMEO_JSON, encoding="utf-8") as f:
     country_names: dict[str, str] = json.load(f)
 
+# ── Country detail (only when a country is selected) ──────────────────────
+country_relations = None
+if fs.get("selected_country"):
+    country_relations = get_country_relations(
+        fs["selected_country"],
+        date.fromisoformat(fs["from_date"]),
+        date.fromisoformat(fs["to_date"]),
+    )
+
 # ── Render the component ──────────────────────────────────────────────────
 component_value = _network_map(
     edges=edges,
     country_names=country_names,
     bounds={"min": min_date.isoformat(), "max": max_date.isoformat()},
     filter_state=fs,
+    country_relations=country_relations,
     default=None,
     key="network_map",
 )
 
-# Component pushed a new filter → persist and rerun so Python recomputes edges
+# Component pushed new state → persist and rerun
 if isinstance(component_value, dict) and component_value != fs:
     required = {"from_date", "to_date", "goldstein_filter"}
     if required.issubset(component_value.keys()):
-        st.session_state.filter_state = component_value
+        st.session_state.filter_state = {
+            **DEFAULT_FILTER,
+            **component_value,
+        }
         st.rerun()

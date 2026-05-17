@@ -123,3 +123,64 @@ def load_edges_range(
         "actor1_code", "actor2_code", "goldstein_category",
         "goldstein_scale", "num_mentions", "count",
     ]].to_dict(orient="records")
+
+
+def get_country_relations(
+    country_code: str,
+    from_date: date,
+    to_date: date,
+) -> dict:
+    """Top-10 most positive / most negative partners for `country_code`.
+
+    Aggregates the cached day-level frame (no Parquet re-read). Score per
+    partner is the weighted mean GoldsteinScale, identical to the
+    edge-level score formula (SUM(ln(1+NM)·GS) / SUM(ln(1+NM))). Returns
+    the top 10 of each sign and the total number of underlying events
+    over the selected period.
+    """
+    df = load_day_level_edges()
+    empty = {"positif": [], "negatif": [], "total": 0}
+    if df.empty:
+        return empty
+    start = pd.Timestamp(from_date)
+    end   = pd.Timestamp(to_date)
+    mask = (df["sqldate"] >= start) & (df["sqldate"] <= end)
+    mask &= (df["actor1_code"] == country_code) | (df["actor2_code"] == country_code)
+    sub = df.loc[mask]
+    if sub.empty:
+        return empty
+    other = sub["actor2_code"].where(
+        sub["actor1_code"] == country_code, sub["actor1_code"]
+    )
+    sub = sub.assign(other=other)
+    agg = sub.groupby("other", as_index=False).agg(
+        weighted_sum=("weighted_sum", "sum"),
+        weight_sum=("weight_sum", "sum"),
+        count=("event_count", "sum"),
+    )
+    agg = agg[agg["weight_sum"] > 0]
+    if agg.empty:
+        return empty
+    agg["score"] = agg["weighted_sum"] / agg["weight_sum"]
+    total = int(agg["count"].sum())
+    positif = (
+        agg[agg["score"] > 0]
+        .sort_values("score", ascending=False)
+        .head(10)
+        .rename(columns={"other": "country_code"})
+        [["country_code", "score", "count"]]
+    )
+    positif["count"] = positif["count"].astype(int)
+    negatif = (
+        agg[agg["score"] < 0]
+        .sort_values("score", ascending=True)
+        .head(10)
+        .rename(columns={"other": "country_code"})
+        [["country_code", "score", "count"]]
+    )
+    negatif["count"] = negatif["count"].astype(int)
+    return {
+        "positif": positif.to_dict(orient="records"),
+        "negatif": negatif.to_dict(orient="records"),
+        "total": total,
+    }
