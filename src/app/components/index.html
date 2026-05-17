@@ -343,8 +343,9 @@ const map = L.map("map", {
   maxBoundsViscosity: 1.0,
   minZoom: 2,
   maxZoom: 8,
+  zoomSnap: 0.5,
   worldCopyJump: false,
-}).setView([20, 15], 3);
+}).setView([20, 15], 3.5);
 
 L.tileLayer(
   "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",

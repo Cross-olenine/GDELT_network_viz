@@ -173,12 +173,41 @@ dans le GeoJSON de référence.
 - **Panneau filtres** : slide depuis `left: 48px` (largeur 280 px,
   hauteur 100vh) pour ne pas recouvrir la barre d'outils. Clic
   extérieur (hors panneau et hors barre d'outils) ferme le panneau.
-- **Zoom Leaflet initial** : `setView([20, 15], 3)` — centre sur le
-  monde habité, zoom 3 pour éliminer les bandes grises haut/bas du
-  viewport initial. `minZoom: 2`, `maxZoom: 8`.
+- **Zoom Leaflet initial** : `setView([20, 15], 3.5)` — centre sur le
+  monde habité, zoom 3.5 pour éliminer les bandes grises haut/bas et
+  resserrer la vue d'ensemble. `minZoom: 2`, `maxZoom: 8`,
+  `zoomSnap: 0.5` (autorise les demi-niveaux de zoom).
 - **Contrôles zoom Leaflet repositionnés** : déplacés en haut à
   droite (`top: 16px`, `right: 16px`) pour libérer la zone gauche
   occupée par la barre d'outils.
+
+## Évolution — épaisseur d'edge proportionnelle au volume (2026-05-17)
+
+### Besoin
+Donner à la lecture du graphe une information immédiate sur le
+volume d'interactions entre deux pays : un edge épais = beaucoup
+d'événements, un edge fin = peu d'événements. Sans cette
+proportionnalité, tous les edges paraissent équivalents et masquent
+les asymétries de volume.
+
+### Solution retenue
+- **Donnée ajoutée** : champ `count` par edge (nombre d'événements
+  GDELT entre `actor1_code` et `actor2_code` sur la plage filtrée).
+  Calculé via `COUNT(*)` au grain jour dans la pré-agrégation
+  DuckDB, puis sommé dans la re-agrégation pandas du filtre date.
+- **Normalisation côté composant** : calcul `min_count` /
+  `max_count` sur l'ensemble des edges reçus, à chaque réception.
+  `score_normalisé = (count - min) / (max - min)`.
+- **Épaisseur** : `strokeWidth = 0.3 + score_normalisé * 5.7`
+  (plage 0.3 px → 6 px).
+- **Cohérence d'état** : l'épaisseur proportionnelle est appliquée
+  en état par défaut (opacity 0.03), en hover (opacity 0.8) et au
+  reset — l'asymétrie de volume reste lisible quel que soit l'état
+  de surlignage.
+- **Recalcul automatique** : à chaque changement de filtre (période
+  ou `goldstein_category`), Python renvoie une nouvelle liste
+  d'edges, le composant recalcule les bornes — les épaisseurs
+  s'adaptent à la sous-population sélectionnée.
 
 ## Décisions précédemment bloquées — résolues
 
