@@ -73,7 +73,7 @@
   #panel.open { transform: translateX(0); }
 
   /* ── Leaflet zoom control repositioned ───────────────────────────────── */
-  .leaflet-top.leaflet-left { left: auto; right: 16px; top: 16px; }
+  .leaflet-top.leaflet-left { left: 60px; top: 16px; }
   .leaflet-top.leaflet-left .leaflet-control { margin: 0; }
 
   .panel-header {
@@ -161,6 +161,66 @@
     display: none; max-width: 340px;
   }
 
+  /* ── Country detail panel (right side) ───────────────────────────────── */
+  #country-panel {
+    position: fixed;
+    top: 0; right: -320px;
+    width: 320px; height: 100vh;
+    background: #fff;
+    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.18);
+    transition: right 300ms ease;
+    z-index: 999;
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    color: #222;
+  }
+  #country-panel.open { right: 0; }
+  .cp-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 18px 20px 6px;
+  }
+  .cp-header h2 {
+    font-size: 18px; font-weight: 600; margin: 0; line-height: 1.2;
+    flex: 1; padding-right: 12px;
+  }
+  #cp-close {
+    background: none; border: none; font-size: 18px; color: #666;
+    cursor: pointer; padding: 4px 8px; border-radius: 4px;
+  }
+  #cp-close:hover { background: #f3f3f3; color: #222; }
+  .cp-total {
+    padding: 0 20px 14px; color: #666; font-size: 12px;
+    border-bottom: 1px solid #eee;
+  }
+  .pill-group {
+    display: flex; gap: 8px; padding: 14px 20px;
+  }
+  .pill {
+    flex: 1; padding: 7px 12px; border-radius: 999px;
+    border: 1px solid #ddd; background: #fff; color: #444;
+    font-size: 12px; cursor: pointer; transition: all 150ms ease;
+  }
+  .pill:hover { background: #f7f7f7; }
+  .pill.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  #cp-list {
+    list-style: none; padding: 0 12px 20px; margin: 0;
+    flex: 1; overflow-y: auto;
+  }
+  #cp-list li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; gap: 12px;
+  }
+  #cp-list li:hover { background: #f5f5f5; }
+  #cp-list li.selected { background: #ececec; font-weight: 600; }
+  #cp-list .rank { color: #999; width: 22px; text-align: right; flex-shrink: 0; }
+  #cp-list .label { flex: 1; }
+  #cp-list .score { font-variant-numeric: tabular-nums; }
+  #cp-list .score.pos { color: #2ecc71; }
+  #cp-list .score.neg { color: #e74c3c; }
+  .cp-empty { padding: 20px; color: #999; font-size: 12px; text-align: center; }
+
   #tooltip {
     position: absolute;
     background: #fff; color: #222;
@@ -233,6 +293,19 @@
   </div>
 </aside>
 
+<aside id="country-panel" role="dialog" aria-label="Détail pays">
+  <div class="cp-header">
+    <h2 id="cp-name">—</h2>
+    <button id="cp-close" title="Fermer" aria-label="Fermer">✕</button>
+  </div>
+  <div class="cp-total"><strong id="cp-total">0</strong> relation(s) sur la période</div>
+  <div class="pill-group">
+    <button class="pill active" data-pill="positif">● Positif</button>
+    <button class="pill"        data-pill="negatif">Négatif</button>
+  </div>
+  <ol id="cp-list"></ol>
+</aside>
+
 <div id="legend">
   <strong>Goldstein Score</strong>
   <div class="legend-item"><div class="legend-dot" style="background:#2ecc71"></div> Positif</div>
@@ -265,8 +338,14 @@ let dragMoved      = false;
 
 let dateBounds = null;
 let totalDays  = 0;
-let currentFilter = { from_date: null, to_date: null, goldstein_filter: "Tous" };
+let currentFilter = { from_date: null, to_date: null, goldstein_filter: "Tous", selected_country: null };
 let filterInitialised = false;
+
+// ── Country detail state ──────────────────────────────────────────────────
+let countryRelations = null;   // {positif:[...], negatif:[...], total:N}
+let selectedCountry  = null;   // country A — fetched from Python
+let selectedPair     = null;   // country B — picked in the list, JS-only
+let activePill       = "positif";
 
 // ── Edge thickness normalisation ──────────────────────────────────────────
 // Linéaire sur le count (nb d'événements) entre 0.3px (min observé) et
@@ -440,22 +519,24 @@ function render() {
       tooltip.style.display = "block";
       tooltip.style.left = (event.pageX + 12) + "px";
       tooltip.style.top  = (event.pageY - 28) + "px";
+      if (selectedCountry) return;
       if (!lockedCountry) { hoveredCountry = d.code; applyHighlight(d.code); }
     })
     .on("mouseout", function() {
       tooltip.style.display = "none";
+      if (selectedCountry) return;
       hoveredCountry = null;
       if (!lockedCountry) clearHighlight();
     })
     .on("click", function(event, d) {
       if (dragMoved) return;
       event.stopPropagation();
-      if (lockedCountry === d.code) {
-        lockedCountry = null;
-        clearHighlight();
+      lockedCountry = null;
+      hoveredCountry = null;
+      if (selectedCountry === d.code) {
+        closeCountryPanel();
       } else {
-        lockedCountry = d.code;
-        applyHighlight(d.code);
+        openCountryPanel(d.code);
       }
     });
 
@@ -480,8 +561,12 @@ function render() {
 
   nodeSel.exit().remove();
 
-  const active = lockedCountry ?? hoveredCountry;
-  if (active) applyHighlight(active);
+  if (typeof applyVisualState === "function") {
+    applyVisualState();
+  } else {
+    const active = lockedCountry ?? hoveredCountry;
+    if (active) applyHighlight(active);
+  }
 }
 
 function dragBehavior() {
@@ -527,6 +612,7 @@ function dragBehavior() {
 }
 
 map.on("click", () => {
+  if (selectedCountry) return;
   if (lockedCountry) { lockedCountry = null; clearHighlight(); }
 });
 map.on("moveend zoomend", () => {
@@ -664,18 +750,32 @@ function updateSliderUI() {
 
 function pushFilterToStreamlit() {
   if (!filterInitialised) return;
+  // Changing a filter resets the country selection (results would be stale).
+  selectedCountry = null;
+  selectedPair    = null;
+  countryRelations = null;
   const newFilter = {
     from_date: dayIndexToISO(fromInput.value),
     to_date:   dayIndexToISO(toInput.value),
     goldstein_filter: document.querySelector('input[name="cat"]:checked').value,
+    selected_country: null,
   };
   if (newFilter.from_date === currentFilter.from_date
       && newFilter.to_date === currentFilter.to_date
-      && newFilter.goldstein_filter === currentFilter.goldstein_filter) {
+      && newFilter.goldstein_filter === currentFilter.goldstein_filter
+      && newFilter.selected_country === currentFilter.selected_country) {
     return;
   }
   currentFilter = newFilter;
   streamlitSetValue(newFilter);
+}
+
+function pushCountrySelectionToStreamlit(code) {
+  // Send the full state with the new selected_country; Python fetches the
+  // top10s and re-renders the component with country_relations.
+  const newState = { ...currentFilter, selected_country: code };
+  currentFilter = newState;
+  streamlitSetValue(newState);
 }
 
 fromInput.addEventListener("input", () => {
@@ -724,10 +824,156 @@ window.addEventListener("message", function(event) {
 
   edgeCount.textContent = edges.length.toLocaleString("fr-FR");
 
+  // Country detail payload (set by Python when a country is selected)
+  selectedCountry  = filterState?.selected_country || null;
+  countryRelations = args.country_relations || null;
+  if (selectedCountry && countryRelations) {
+    renderCountryPanel();
+    showCountryPanel();
+  } else {
+    hideCountryPanel();
+  }
+
   console.log("[GDELT] edges reçus :", edges.length, "— pays actifs :", activeCountries.size);
   logGdeltMatchStats();
   render();
+  applyVisualState();
 });
+
+// ── Country detail panel ──────────────────────────────────────────────────
+const cpEl        = document.getElementById("country-panel");
+const cpNameEl    = document.getElementById("cp-name");
+const cpTotalEl   = document.getElementById("cp-total");
+const cpListEl    = document.getElementById("cp-list");
+const cpCloseEl   = document.getElementById("cp-close");
+const cpPillEls   = document.querySelectorAll("#country-panel .pill");
+
+function showCountryPanel() { cpEl.classList.add("open"); }
+function hideCountryPanel() { cpEl.classList.remove("open"); }
+
+function openCountryPanel(code) {
+  selectedPair = null;
+  // Trigger Python fetch — the next render will set countryRelations and
+  // show the panel.
+  pushCountrySelectionToStreamlit(code);
+}
+
+function closeCountryPanel() {
+  selectedCountry  = null;
+  selectedPair     = null;
+  countryRelations = null;
+  hideCountryPanel();
+  pushCountrySelectionToStreamlit(null);
+}
+
+function renderCountryPanel() {
+  cpNameEl.textContent = countryNames[selectedCountry] || selectedCountry;
+  const total = countryRelations?.total ?? 0;
+  cpTotalEl.textContent = total.toLocaleString("fr-FR");
+  const list = activePill === "positif"
+    ? (countryRelations?.positif ?? [])
+    : (countryRelations?.negatif ?? []);
+  cpListEl.innerHTML = "";
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "cp-empty";
+    li.textContent = "Aucune relation dans cette catégorie.";
+    cpListEl.appendChild(li);
+    return;
+  }
+  list.forEach((row, idx) => {
+    const li = document.createElement("li");
+    li.dataset.code = row.country_code;
+    if (row.country_code === selectedPair) li.classList.add("selected");
+    const score = Number(row.score);
+    const signed = (score >= 0 ? "+" : "") + score.toFixed(1);
+    const label = countryNames[row.country_code] || row.country_code;
+    li.innerHTML =
+      `<span class="rank">${idx + 1}.</span>` +
+      `<span class="label">${label}</span>` +
+      `<span class="score ${score >= 0 ? "pos" : "neg"}">${signed}</span>`;
+    li.addEventListener("click", () => {
+      selectedPair = (selectedPair === row.country_code) ? null : row.country_code;
+      renderCountryPanel();
+      applyVisualState();
+    });
+    cpListEl.appendChild(li);
+  });
+}
+
+cpCloseEl.addEventListener("click", (e) => { e.stopPropagation(); closeCountryPanel(); });
+cpPillEls.forEach(btn => {
+  btn.addEventListener("click", () => {
+    const pill = btn.dataset.pill;
+    if (pill === activePill) return;
+    activePill = pill;
+    cpPillEls.forEach(b => b.classList.toggle("active", b.dataset.pill === activePill));
+    selectedPair = null;
+    renderCountryPanel();
+    applyVisualState();
+  });
+});
+
+// ── Visual state orchestration ────────────────────────────────────────────
+function applyVisualState() {
+  if (!selectedCountry) {
+    const active = lockedCountry ?? hoveredCountry;
+    if (active) applyHighlight(active);
+    else clearHighlight();
+    return;
+  }
+  const list = activePill === "positif"
+    ? (countryRelations?.positif ?? [])
+    : (countryRelations?.negatif ?? []);
+  const topCodes = new Set(list.map(r => r.country_code));
+  if (selectedPair) applyPairMode(selectedCountry, selectedPair);
+  else              applyCountryMode(selectedCountry, topCodes);
+}
+
+function edgeIsPair(e, a, b) {
+  return (e.actor1_code === a && e.actor2_code === b)
+      || (e.actor1_code === b && e.actor2_code === a);
+}
+function edgeTouches(e, code) {
+  return e.actor1_code === code || e.actor2_code === code;
+}
+function edgeOther(e, code) {
+  return e.actor1_code === code ? e.actor2_code : e.actor1_code;
+}
+function categoryColor(cat) {
+  return cat === "positif" ? "#2ecc71"
+       : cat === "negatif" ? "#e74c3c" : "#95a5a6";
+}
+
+function applyCountryMode(code, topCodes) {
+  edgeG.selectAll("line.edge-line")
+    .attr("stroke-opacity", e => {
+      if (!edgeTouches(e, code)) return 0.02;
+      return topCodes.has(edgeOther(e, code)) ? 0.6 : 0.02;
+    })
+    .attr("stroke-width", e => strokeWidthFor(e))
+    .attr("stroke", e => {
+      if (!edgeTouches(e, code) || !topCodes.has(edgeOther(e, code))) return "#aaa";
+      return categoryColor(e.goldstein_category);
+    });
+  countryG.selectAll("g.country-group").select("path.country-path")
+    .attr("opacity", d => (d.code === code || topCodes.has(d.code)) ? 1.0 : 0.3)
+    .attr("stroke", "#fff")
+    .attr("stroke-width", d => topCodes.has(d.code) ? 2 : 0.5);
+  document.getElementById("info-panel").style.display = "none";
+}
+
+function applyPairMode(a, b) {
+  edgeG.selectAll("line.edge-line")
+    .attr("stroke-opacity", e => edgeIsPair(e, a, b) ? 1.0 : 0.02)
+    .attr("stroke-width",   e => edgeIsPair(e, a, b) ? 3   : strokeWidthFor(e))
+    .attr("stroke", e => edgeIsPair(e, a, b) ? categoryColor(e.goldstein_category) : "#aaa");
+  countryG.selectAll("g.country-group").select("path.country-path")
+    .attr("opacity", d => (d.code === a || d.code === b) ? 1.0 : 0.3)
+    .attr("stroke", "#fff")
+    .attr("stroke-width", d => d.code === b ? 3 : 0.5);
+  document.getElementById("info-panel").style.display = "none";
+}
 
 streamlitReady();
 streamlitSetHeight(window.innerHeight);
