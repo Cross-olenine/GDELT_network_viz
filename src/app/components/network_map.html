@@ -25,15 +25,19 @@
   .edge-line.neutre  { stroke: #95a5a6; }
 
   .country-path { stroke: #fff; stroke-width: 0.5; opacity: 0.85; pointer-events: none; }
-  .node-label {
+
+  #tooltip {
+    position: fixed;
+    background: rgba(30,30,30,0.88);
+    color: #fff;
     font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 11px;
-    font-weight: 700;
-    fill: #fff;
-    text-anchor: middle;
-    dominant-baseline: central;
+    font-size: 13px;
+    padding: 5px 10px;
+    border-radius: 5px;
     pointer-events: none;
-    user-select: none;
+    white-space: nowrap;
+    z-index: 3000;
+    display: none;
   }
 
   #legend {
@@ -71,6 +75,7 @@
 
 <div id="map"></div>
 <div id="loading">Chargement des frontières pays…</div>
+<div id="tooltip"></div>
 
 <div id="legend">
   <strong>Goldstein Score</strong>
@@ -177,14 +182,25 @@ function render() {
     .selectAll("g.country-group")
     .data(nodeData, d => d.code);
 
+  const tooltip = document.getElementById("tooltip");
+
   const nodeEnter = nodeSel.enter()
     .append("g")
     .attr("class", "country-group");
 
   nodeEnter.append("path").attr("class", "country-path");
-  nodeEnter.append("text").attr("class", "node-label");
-  // Invisible circle at centroid — sole drag target
-  nodeEnter.append("circle").attr("class", "drag-handle").call(dragBehavior());
+  // Invisible circle at centroid — drag target + tooltip trigger
+  nodeEnter.append("circle").attr("class", "drag-handle")
+    .call(dragBehavior())
+    .on("mousemove", function(event, d) {
+      tooltip.textContent = countryNames[d.code] || d.code;
+      tooltip.style.display = "block";
+      tooltip.style.left = (event.clientX + 14) + "px";
+      tooltip.style.top  = (event.clientY - 28) + "px";
+    })
+    .on("mouseout", function() {
+      tooltip.style.display = "none";
+    });
 
   const nodeMerge = nodeEnter.merge(nodeSel);
 
@@ -198,11 +214,6 @@ function render() {
   nodeMerge.select("path.country-path")
     .attr("d", d => path(d.feature))
     .attr("fill", d => countryColor(d.code));
-
-  nodeMerge.select("text.node-label")
-    .attr("x", d => geoCentroid(d.code).x)
-    .attr("y", d => geoCentroid(d.code).y)
-    .text(d => d.code);
 
   nodeMerge.select("circle.drag-handle")
     .attr("cx", d => geoCentroid(d.code).x)
