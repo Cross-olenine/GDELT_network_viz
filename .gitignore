@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Données brutes
+exploration/data/raw/*
+!exploration/data/raw/.gitkeep
+
+# Données ingérées (Parquet volumineuses — ne pas committer)
+data/events/
+data/tmp/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Donnees GDELT
+data/events/
+data/tmp/
