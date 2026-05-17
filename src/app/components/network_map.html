@@ -40,16 +40,17 @@
   .country-path { stroke: #fff; stroke-width: 0.5; opacity: 0.85; pointer-events: none; }
 
   #tooltip {
-    position: fixed;
-    background: rgba(30,30,30,0.88);
-    color: #fff;
+    position: absolute;
+    background: #fff;
+    color: #222;
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 13px;
-    padding: 5px 10px;
-    border-radius: 5px;
+    padding: 6px 10px;
+    border-radius: 4px;
     pointer-events: none;
     white-space: nowrap;
     z-index: 3000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
     display: none;
   }
 
@@ -257,8 +258,8 @@ function render() {
     .on("mousemove", function(event, d) {
       tooltip.textContent = countryNames[d.code] || d.code;
       tooltip.style.display = "block";
-      tooltip.style.left = (event.clientX + 14) + "px";
-      tooltip.style.top  = (event.clientY - 28) + "px";
+      tooltip.style.left = (event.pageX + 12) + "px";
+      tooltip.style.top  = (event.pageY - 28) + "px";
       if (!lockedCountry) { hoveredCountry = d.code; applyHighlight(d.code); }
     })
     .on("mouseout", function() {
@@ -280,7 +281,7 @@ function render() {
 
   const nodeMerge = nodeEnter.merge(nodeSel);
 
-  // The <g> carries the drag offset; path + label use absolute geo coordinates
+  // The <g> carries the drag offset; path uses absolute geo coordinates
   nodeMerge
     .attr("transform", d => {
       const o = offsets[d.code] ?? { dx: 0, dy: 0 };
