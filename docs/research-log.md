@@ -109,3 +109,20 @@ conséquence.
 - AvgTone : décision de l'intégrer dans les scores finaux non tranchée —
   sa complémentarité est établie (r=0,31) mais son rôle exact dans
   l'affichage reste ouvert
+
+## 2026-05-17 — POC fonctionnel — diagnostic pays manquants sur la carte
+
+### Corrections appliquées
+- Labels trigrammes supprimés des silhouettes SVG
+- Tooltips hover fonctionnels : nom complet en français au survol
+- Range slider de dates implémenté
+- Fond de carte light_nolabels actif
+
+### État actuel
+Le POC Streamlit est fonctionnel : la carte s'affiche avec le réseau de relations entre pays, les tooltips hover et le slider temporel sont opérationnels. Certains pays présents dans les données GDELT n'apparaissent pas sur la carte.
+
+### Problèmes identifiés
+- Pays absents de la carte malgré leur présence dans les données GDELT : cause non encore diagnostiquée (mismatch de codes pays, absence de géolocalisation, filtre non intentionnel, ou silhouette SVG manquante).
+
+### Prochaine étape
+Diagnostiquer et corriger l'absence de certains pays sur la carte.
